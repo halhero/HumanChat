@@ -6,3 +6,5 @@ __pycache__/
 .mypy_cache/
 speech/tmp.wav
 data/sessions/*.json
+data/memory/*.json
+!data/memory/*.example.json

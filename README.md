@@ -14,6 +14,7 @@ HumanChat/
     config.py             # Environment-based settings
     logging_config.py     # Logging setup helpers
     llm.py                # Chat model factory
+    memory_store.py       # Long-term memory loading and formatting
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
     tts.py                # GPT-SoVITS HTTP client and service helpers
@@ -22,6 +23,7 @@ HumanChat/
   speech/
     tmp.wav               # Generated speech output
   data/
+    memory/               # Long-term memory templates and local memory
     sessions/             # Saved chat sessions
 ```
 
@@ -88,6 +90,20 @@ Switch characters by setting:
 HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
 ```
 
+## Long-Term Memory
+
+Long-term memory stores stable user preferences and project facts across sessions.
+The default memory path is:
+
+```env
+HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
+```
+
+If the file does not exist, HumanChat creates it from the built-in default memory.
+Real memory files are ignored by Git; use `data/memory/user_profile.example.json` as a template.
+
+Long-term memory is injected into the system prompt together with the selected character profile.
+
 ## Run
 
 ```powershell
@@ -108,7 +124,7 @@ HUMANCHAT_SESSION_DIR="data/sessions"
 
 ## Next Milestones
 
-1. Add long-term memory based on saved sessions.
+1. Add automatic memory extraction from chat turns.
 2. Add voice input for spoken conversations.
 3. Add tool-calling nodes to the LangGraph workflow.
 4. Add a simple UI after the core runtime is stable.

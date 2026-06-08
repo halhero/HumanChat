@@ -6,6 +6,7 @@ from human_chat.character import load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
+from human_chat.memory_store import format_memory_for_prompt, load_memory
 from human_chat.schemas import ChatState, TtsResponse
 from human_chat.tts import TtsClient, TtsError
 
@@ -19,9 +20,11 @@ STRUCTURED_OUTPUT_INSTRUCTION = """
 """
 
 
-def _build_system_prompt(character) -> str:
+def _build_system_prompt(character, memory_prompt: str) -> str:
     return (
         f"{character.system_prompt}\n"
+        f"以下是你应该长期记住的用户和项目背景：\n"
+        f"{memory_prompt}\n"
         f"请使用角色配置指定的语言回复：{character.reply_language}。\n"
         f"{STRUCTURED_OUTPUT_INSTRUCTION}"
     )
@@ -30,13 +33,15 @@ def _build_system_prompt(character) -> str:
 def build_graph(settings: Settings | None = None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
+    memory = load_memory(settings.memory_path)
+    memory_prompt = format_memory_for_prompt(memory)
     llm = create_chat_model(settings)
     tts_client = TtsClient(settings, character)
 
     def chat(state: ChatState):
         prompt_template = ChatPromptTemplate.from_messages(
             [
-                ("system", _build_system_prompt(character)),
+                ("system", _build_system_prompt(character, memory_prompt)),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]
