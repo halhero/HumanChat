@@ -1,0 +1,7 @@
+python-dotenv
+pydantic
+requests
+simpleaudio
+langchain-core
+langchain-openai
+langgraph
