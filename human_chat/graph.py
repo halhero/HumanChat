@@ -2,6 +2,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, StateGraph
 
+from human_chat.character import load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
@@ -12,23 +13,30 @@ from human_chat.tts import TtsClient, TtsError
 logger = get_logger(__name__)
 
 
-SYSTEM_PROMPT = """
-你是一个聊天助手，请你根据用户的问题以及提供的上下文给出用户适当的回复。
-注意：仅回复一句话，回复内容使用日语，并且以 JSON 格式返回。
-JSON 格式：
-text: 你的回答
+STRUCTURED_OUTPUT_INSTRUCTION = """
+请以 JSON 格式返回，格式为：
+{"text": "你的回答"}
 """
+
+
+def _build_system_prompt(character) -> str:
+    return (
+        f"{character.system_prompt}\n"
+        f"请使用角色配置指定的语言回复：{character.reply_language}。\n"
+        f"{STRUCTURED_OUTPUT_INSTRUCTION}"
+    )
 
 
 def build_graph(settings: Settings | None = None):
     settings = settings or load_settings()
+    character = load_character(settings.character_path)
     llm = create_chat_model(settings)
-    tts_client = TtsClient(settings)
+    tts_client = TtsClient(settings, character)
 
     def chat(state: ChatState):
         prompt_template = ChatPromptTemplate.from_messages(
             [
-                ("system", SYSTEM_PROMPT),
+                ("system", _build_system_prompt(character)),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]

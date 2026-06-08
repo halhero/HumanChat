@@ -5,6 +5,7 @@ from pathlib import Path
 import requests
 import simpleaudio as sa
 
+from human_chat.character import Character
 from human_chat.config import Settings
 from human_chat.logging_config import get_logger
 
@@ -17,8 +18,9 @@ class TtsError(RuntimeError):
 
 
 class TtsClient:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, character: Character):
         self.settings = settings
+        self.character = character
 
     def synthesize_and_play(self, text: str) -> None:
         output_path = Path(self.settings.speech_output_path)
@@ -47,15 +49,16 @@ class TtsClient:
             raise TtsError("TTS音频播放失败") from exc
 
     def _payload(self, text: str) -> dict:
+        tts = self.character.tts
         return {
-            "ref_audio_path": self.settings.tts_ref_audio_path,
-            "prompt_text": self.settings.tts_prompt_text,
-            "prompt_lang": self.settings.tts_prompt_lang,
+            "ref_audio_path": tts.ref_audio_path,
+            "prompt_text": tts.prompt_text,
+            "prompt_lang": tts.prompt_lang,
             "text": text,
-            "text_lang": self.settings.tts_text_lang,
-            "text_split_method": self.settings.tts_split_method,
+            "text_lang": tts.text_lang,
+            "text_split_method": tts.split_method,
             "batch_size": 1,
-            "speed_factor": self.settings.tts_speed_factor,
+            "speed_factor": tts.speed_factor,
         }
 
 

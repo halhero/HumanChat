@@ -5,3 +5,4 @@ simpleaudio
 langchain-core
 langchain-openai
 langgraph
+PyYAML

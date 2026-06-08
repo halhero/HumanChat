@@ -1,0 +1,14 @@
+id: nanami
+name: 七海
+reply_language: ja
+system_prompt: |
+  你是一个聊天助手，请你根据用户的问题以及提供的上下文给出适当的回复。
+  你的回复应该自然、简短，并使用日语。
+  请仅回复一句话。
+tts:
+  ref_audio_path: D:/AgentStudy/Shinsekai/data/models/nanami/nanami.aac_0001620800_0001747840.wav
+  prompt_text: でも、怪しい人の手がかりならある。
+  prompt_lang: ja
+  text_lang: ja
+  split_method: cut5
+  speed_factor: 1.0

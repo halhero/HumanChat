@@ -35,6 +35,7 @@ class Settings(BaseModel):
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+    character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
     speech_output_path: Path = PROJECT_ROOT / "speech" / "tmp.wav"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
 
@@ -61,6 +62,7 @@ def load_settings() -> Settings:
             "HUMANCHAT_LLM_BASE_URL",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
+        character_path=_env_path("HUMANCHAT_CHARACTER_PATH", PROJECT_ROOT / "characters" / "nanami.yaml"),
         speech_output_path=_env_path("HUMANCHAT_SPEECH_OUTPUT_PATH", PROJECT_ROOT / "speech" / "tmp.wav"),
         session_dir=_env_path("HUMANCHAT_SESSION_DIR", PROJECT_ROOT / "data" / "sessions"),
         tts_service_url=os.getenv("HUMANCHAT_TTS_SERVICE_URL", "http://127.0.0.1:9880"),
