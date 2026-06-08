@@ -1,7 +1,14 @@
 from human_chat.config import Settings, load_settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger, setup_logging
-from human_chat.session_store import create_session, messages_to_dicts, save_session
+from human_chat.session_store import (
+    create_session,
+    dicts_to_messages,
+    list_sessions,
+    load_session,
+    messages_to_dicts,
+    save_session,
+)
 from human_chat.tts import start_tts_service, stop_tts_service
 
 
@@ -29,7 +36,8 @@ def chat_loop(settings: Settings | None = None) -> None:
 
     try:
         app = build_graph(settings)
-        _run_chat_loop(app, settings)
+        session = _choose_session(settings)
+        _run_chat_loop(app, settings, session)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -46,10 +54,73 @@ def _start_optional_tts(settings: Settings):
     return tts_process
 
 
-def _run_chat_loop(app, settings: Settings) -> None:
+def _choose_session(settings: Settings) -> dict:
+    recent_sessions = list_sessions(settings, limit=10)
+
+    if not recent_sessions:
+        return _create_new_session(settings)
+
+    print("请选择会话：")
+    print("1. 新建会话")
+    print("2. 继续最近会话")
+    print("3. 从最近会话列表选择")
+
+    choice = input("选择：").strip()
+
+    if choice == "2":
+        session_id = recent_sessions[0]["id"]
+        session = load_session(settings, session_id)
+        print(f"继续最近会话：{session_id}")
+        return session
+
+    if choice == "3":
+        _print_recent_sessions(recent_sessions)
+        selected = input("输入会话序号或会话 ID：").strip()
+        session_id = _resolve_session_id(selected, recent_sessions)
+
+        if session_id:
+            session = load_session(settings, session_id)
+            print(f"继续会话：{session_id}")
+            return session
+
+        print("未找到该会话，将创建新会话。")
+
+    return _create_new_session(settings)
+
+
+def _create_new_session(settings: Settings) -> dict:
     session = create_session()
-    messages = []
     save_session(settings, session)
+    print(f"已创建新会话：{session['id']}")
+    return session
+
+
+def _print_recent_sessions(sessions: list[dict]) -> None:
+    print("最近会话：")
+
+    for index, session in enumerate(sessions, start=1):
+        print(
+            f"{index}. {session['id']} "
+            f"updated={session['updated_at']} "
+            f"messages={session['message_count']}"
+        )
+
+
+def _resolve_session_id(value: str, sessions: list[dict]) -> str | None:
+    if value.isdigit():
+        index = int(value) - 1
+        if 0 <= index < len(sessions):
+            return sessions[index]["id"]
+
+    for session in sessions:
+        if session["id"] == value:
+            return session["id"]
+
+    return None
+
+
+def _run_chat_loop(app, settings: Settings, session: dict) -> None:
+    messages = dicts_to_messages(session.get("messages", []))
     print(f"HumanChat 已启动，会话：{session['id']}")
     print("输入 exit / quit / q / 退出 可结束。")
 

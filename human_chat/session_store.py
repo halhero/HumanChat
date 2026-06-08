@@ -44,6 +44,31 @@ def load_session(settings: Settings, session_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def list_sessions(settings: Settings, limit: int = 10) -> list[dict]:
+    if not settings.session_dir.exists():
+        return []
+
+    sessions = []
+
+    for path in settings.session_dir.glob("*.json"):
+        try:
+            session = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        sessions.append(
+            {
+                "id": session.get("id", path.stem),
+                "created_at": session.get("created_at", ""),
+                "updated_at": session.get("updated_at", ""),
+                "message_count": len(session.get("messages", [])),
+            }
+        )
+
+    sessions.sort(key=lambda item: item["updated_at"], reverse=True)
+    return sessions[:limit]
+
+
 def messages_to_dicts(messages: list[BaseMessage]) -> list[dict]:
     items = []
 

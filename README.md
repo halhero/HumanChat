@@ -63,7 +63,8 @@ python main.py
 ```
 
 The current entry point starts an interactive chat loop. Type `exit`, `quit`, `q`, or `退出` to stop.
-Each chat run creates a session file in `data/sessions/*.json` by default.
+On startup, HumanChat lets you create a new session, continue the latest session, or choose from recent sessions.
+Session files are stored in `data/sessions/*.json` by default.
 
 If the TTS service fails, HumanChat will keep the text reply and print a speech error instead of exiting the whole chat loop.
 
@@ -75,7 +76,6 @@ HUMANCHAT_SESSION_DIR="data/sessions"
 
 ## Next Milestones
 
-1. Add session resume and recent-session listing.
-2. Add structured error types around model failures.
-3. Add tool-calling nodes to the LangGraph workflow.
-4. Add a simple UI after the core runtime is stable.
+1. Add structured error types around model failures.
+2. Add tool-calling nodes to the LangGraph workflow.
+3. Add a simple UI after the core runtime is stable.
