@@ -18,10 +18,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
 def _env_path(name: str, default: str | Path | None = None) -> Path | None:
     value = os.getenv(name)
     if value:
-        return Path(value).expanduser()
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            return PROJECT_ROOT / path
+        return path
     if default is None:
         return None
-    return Path(default).expanduser()
+    path = Path(default).expanduser()
+    if not path.is_absolute():
+        return PROJECT_ROOT / path
+    return path
 
 
 class Settings(BaseModel):
@@ -30,6 +36,7 @@ class Settings(BaseModel):
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     speech_output_path: Path = PROJECT_ROOT / "speech" / "tmp.wav"
+    session_dir: Path = PROJECT_ROOT / "data" / "sessions"
 
     tts_service_url: str = "http://127.0.0.1:9880"
     tts_auto_start: bool = False
@@ -55,6 +62,7 @@ def load_settings() -> Settings:
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
         speech_output_path=_env_path("HUMANCHAT_SPEECH_OUTPUT_PATH", PROJECT_ROOT / "speech" / "tmp.wav"),
+        session_dir=_env_path("HUMANCHAT_SESSION_DIR", PROJECT_ROOT / "data" / "sessions"),
         tts_service_url=os.getenv("HUMANCHAT_TTS_SERVICE_URL", "http://127.0.0.1:9880"),
         tts_auto_start=_env_bool("HUMANCHAT_TTS_AUTO_START", False),
         gpt_sovits_dir=_env_path("GPT_SOVITS_DIR"),
@@ -73,4 +81,3 @@ def load_settings() -> Settings:
         tts_split_method=os.getenv("HUMANCHAT_TTS_SPLIT_METHOD", "cut5"),
         tts_speed_factor=float(os.getenv("HUMANCHAT_TTS_SPEED_FACTOR", "1.0")),
     )
-

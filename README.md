@@ -11,12 +11,15 @@ HumanChat/
     config.py             # Environment-based settings
     logging_config.py     # Logging setup helpers
     llm.py                # Chat model factory
+    session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
     cli.py                # Runtime helpers for one-shot and interactive execution
   speech/
     tmp.wav               # Generated speech output
+  data/
+    sessions/             # Saved chat sessions
 ```
 
 ## Setup
@@ -60,12 +63,19 @@ python main.py
 ```
 
 The current entry point starts an interactive chat loop. Type `exit`, `quit`, `q`, or `退出` to stop.
+Each chat run creates a session file in `data/sessions/*.json` by default.
 
 If the TTS service fails, HumanChat will keep the text reply and print a speech error instead of exiting the whole chat loop.
 
+You can change the session directory with:
+
+```env
+HUMANCHAT_SESSION_DIR="data/sessions"
+```
+
 ## Next Milestones
 
-1. Add conversation memory and session persistence.
+1. Add session resume and recent-session listing.
 2. Add structured error types around model failures.
 3. Add tool-calling nodes to the LangGraph workflow.
 4. Add a simple UI after the core runtime is stable.

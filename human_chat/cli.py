@@ -1,6 +1,7 @@
 from human_chat.config import Settings, load_settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger, setup_logging
+from human_chat.session_store import create_session, messages_to_dicts, save_session
 from human_chat.tts import start_tts_service, stop_tts_service
 
 
@@ -28,7 +29,7 @@ def chat_loop(settings: Settings | None = None) -> None:
 
     try:
         app = build_graph(settings)
-        _run_chat_loop(app)
+        _run_chat_loop(app, settings)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -45,9 +46,12 @@ def _start_optional_tts(settings: Settings):
     return tts_process
 
 
-def _run_chat_loop(app) -> None:
+def _run_chat_loop(app, settings: Settings) -> None:
+    session = create_session()
     messages = []
-    print("HumanChat 已启动，输入 exit / quit / q / 退出 可结束。")
+    save_session(settings, session)
+    print(f"HumanChat 已启动，会话：{session['id']}")
+    print("输入 exit / quit / q / 退出 可结束。")
 
     while True:
         question = input("\n你：").strip()
@@ -72,6 +76,9 @@ def _run_chat_loop(app) -> None:
             continue
 
         messages = result.get("messages", messages)
+        session["messages"] = messages_to_dicts(messages)
+        save_session(settings, session)
+
         answer = result.get("tts_text", "")
         if answer:
             print(f"助手：{answer}")
