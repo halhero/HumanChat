@@ -1,4 +1,4 @@
-from human_chat.config import Settings, load_settings
+from human_chat.config import PROJECT_ROOT, Settings, load_settings
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.memory_store import (
     add_memory_item,
@@ -15,10 +15,12 @@ from human_chat.session_store import (
     save_session,
 )
 from human_chat.tts import start_tts_service, stop_tts_service
+from human_chat.tools import list_project_files, read_project_file, search_project_text
 
 
 EXIT_COMMANDS = {"exit", "quit", "q", "退出"}
 MEMORY_COMMAND = "/memory"
+TOOL_COMMANDS = {"/tools", "/files", "/read", "/search"}
 logger = get_logger(__name__)
 
 
@@ -143,6 +145,10 @@ def _run_chat_loop(runtime: ChatRuntime) -> None:
             _handle_memory_command(runtime.settings, question)
             continue
 
+        if _is_tool_command(question):
+            _handle_tool_command(question)
+            continue
+
         try:
             result = runtime.ask(question)
         except Exception:
@@ -206,3 +212,42 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         return
 
     print("可用命令：/memory, /memory add ..., /memory delete ...")
+
+
+def _is_tool_command(command: str) -> bool:
+    return command.split(maxsplit=1)[0] in TOOL_COMMANDS
+
+
+def _handle_tool_command(command: str) -> None:
+    parts = command.split(maxsplit=1)
+    action = parts[0]
+
+    if action == "/tools":
+        print("可用工具命令：/files, /read 路径, /search 关键词")
+        return
+
+    if action == "/files":
+        for path in list_project_files(PROJECT_ROOT):
+            print(path)
+        return
+
+    if action == "/read":
+        if len(parts) < 2:
+            print("用法：/read human_chat/graph.py")
+            return
+        try:
+            print(read_project_file(PROJECT_ROOT, parts[1]))
+        except ValueError as exc:
+            print(exc)
+        return
+
+    if action == "/search":
+        if len(parts) < 2:
+            print("用法：/search memory")
+            return
+        matches = search_project_text(PROJECT_ROOT, parts[1])
+        if not matches:
+            print("未找到匹配内容。")
+            return
+        for match in matches:
+            print(f"{match['path']}:{match['line']}: {match['text']}")

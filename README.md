@@ -18,6 +18,7 @@ HumanChat/
     runtime.py            # Conversation runtime orchestration
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
+    tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
     cli.py                # Runtime helpers for one-shot and interactive execution
@@ -115,6 +116,19 @@ During chat, manage long-term memory with:
 /memory add note 这是一条备注
 /memory delete preference 1
 ```
+
+## Project Tools
+
+HumanChat includes safe, read-only project tools exposed as CLI commands:
+
+```text
+/tools
+/files
+/read human_chat/graph.py
+/search memory
+```
+
+These tools are limited to files inside the project directory.
 
 ## Run
 
