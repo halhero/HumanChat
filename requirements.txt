@@ -6,3 +6,4 @@ langchain-core
 langchain-openai
 langgraph
 PyYAML
+openai

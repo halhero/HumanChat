@@ -34,6 +34,8 @@ class Settings(BaseModel):
     openai_api_key: str = Field(default="", description="API key for the chat model provider.")
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    stt_model: str = "whisper-1"
+    stt_base_url: str = ""
 
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
     memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
@@ -63,6 +65,8 @@ def load_settings() -> Settings:
             "HUMANCHAT_LLM_BASE_URL",
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
         ),
+        stt_model=os.getenv("HUMANCHAT_STT_MODEL", "whisper-1"),
+        stt_base_url=os.getenv("HUMANCHAT_STT_BASE_URL", ""),
         character_path=_env_path("HUMANCHAT_CHARACTER_PATH", PROJECT_ROOT / "characters" / "nanami.yaml"),
         memory_path=_env_path("HUMANCHAT_MEMORY_PATH", PROJECT_ROOT / "data" / "memory" / "user_profile.json"),
         speech_output_path=_env_path("HUMANCHAT_SPEECH_OUTPUT_PATH", PROJECT_ROOT / "speech" / "tmp.wav"),

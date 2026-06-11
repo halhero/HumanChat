@@ -1,4 +1,5 @@
 from human_chat.config import PROJECT_ROOT, Settings, load_settings
+from human_chat.input_provider import AudioFileInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.memory_store import (
     add_memory_item,
@@ -45,7 +46,8 @@ def chat_loop(settings: Settings | None = None) -> None:
     try:
         session = _choose_session(settings)
         runtime = ChatRuntime(settings, session)
-        _run_chat_loop(runtime)
+        input_provider = _choose_input_provider(settings)
+        _run_chat_loop(runtime, input_provider)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -60,6 +62,17 @@ def _start_optional_tts(settings: Settings):
             logger.exception("Failed to auto-start TTS service")
             print("TTS自动启动失败，将继续进行文本聊天。")
     return tts_process
+
+
+def _choose_input_provider(settings: Settings):
+    print("请选择输入模式：")
+    print("1. 文字输入")
+    print("2. 音频文件输入")
+    choice = input("选择：").strip()
+    if choice == "2":
+        print("已启用音频文件输入。你仍可输入 /memory、/files、exit 等命令。")
+        return AudioFileInputProvider(settings)
+    return TextInputProvider()
 
 
 def _choose_session(settings: Settings) -> dict:
@@ -127,12 +140,17 @@ def _resolve_session_id(value: str, sessions: list[dict]) -> str | None:
     return None
 
 
-def _run_chat_loop(runtime: ChatRuntime) -> None:
+def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
     print(f"HumanChat 已启动，会话：{runtime.session['id']}")
     print("输入 exit / quit / q / 退出 可结束。")
 
     while True:
-        question = input("\n你：").strip()
+        try:
+            question = input_provider.read_question()
+        except Exception:
+            logger.exception("Failed to read user input")
+            print("读取输入失败，请检查音频文件或输入配置。")
+            continue
 
         if not question:
             continue

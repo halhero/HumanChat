@@ -12,12 +12,14 @@ HumanChat/
   human_chat/
     character.py          # Character profile loading and validation
     config.py             # Environment-based settings
+    input_provider.py     # Text and audio-file input providers
     logging_config.py     # Logging setup helpers
     llm.py                # Chat model factory
     memory_store.py       # Long-term memory loading and formatting
     runtime.py            # Conversation runtime orchestration
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
+    stt.py                # Speech-to-text helpers
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
@@ -146,6 +148,18 @@ You can change the session directory with:
 
 ```env
 HUMANCHAT_SESSION_DIR="data/sessions"
+```
+
+## Voice Input
+
+HumanChat supports a first version of multimodal input through audio files.
+On startup, choose `音频文件输入`, then enter an audio file path. The recognized text is sent through the same chat runtime as normal text input.
+
+Configure STT with:
+
+```env
+HUMANCHAT_STT_MODEL="whisper-1"
+HUMANCHAT_STT_BASE_URL=""
 ```
 
 ## Next Milestones
