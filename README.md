@@ -15,6 +15,7 @@ HumanChat/
     logging_config.py     # Logging setup helpers
     llm.py                # Chat model factory
     memory_store.py       # Long-term memory loading and formatting
+    runtime.py            # Conversation runtime orchestration
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
     tts.py                # GPT-SoVITS HTTP client and service helpers

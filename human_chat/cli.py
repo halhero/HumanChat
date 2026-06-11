@@ -1,5 +1,4 @@
 from human_chat.config import Settings, load_settings
-from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.memory_store import (
     add_memory_item,
@@ -8,12 +7,11 @@ from human_chat.memory_store import (
     load_memory,
     save_memory,
 )
+from human_chat.runtime import ChatRuntime
 from human_chat.session_store import (
     create_session,
-    dicts_to_messages,
     list_sessions,
     load_session,
-    messages_to_dicts,
     save_session,
 )
 from human_chat.tts import start_tts_service, stop_tts_service
@@ -30,8 +28,8 @@ def run_once(question: str, settings: Settings | None = None):
     tts_process = _start_optional_tts(settings)
 
     try:
-        app = build_graph(settings)
-        return app.invoke({"question": question, "messages": []})
+        runtime = ChatRuntime(settings, persist_session=False)
+        return runtime.ask(question)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -43,9 +41,9 @@ def chat_loop(settings: Settings | None = None) -> None:
     tts_process = _start_optional_tts(settings)
 
     try:
-        app = build_graph(settings)
         session = _choose_session(settings)
-        _run_chat_loop(app, settings, session)
+        runtime = ChatRuntime(settings, session)
+        _run_chat_loop(runtime)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -127,9 +125,8 @@ def _resolve_session_id(value: str, sessions: list[dict]) -> str | None:
     return None
 
 
-def _run_chat_loop(app, settings: Settings, session: dict) -> None:
-    messages = dicts_to_messages(session.get("messages", []))
-    print(f"HumanChat 已启动，会话：{session['id']}")
+def _run_chat_loop(runtime: ChatRuntime) -> None:
+    print(f"HumanChat 已启动，会话：{runtime.session['id']}")
     print("输入 exit / quit / q / 退出 可结束。")
 
     while True:
@@ -143,24 +140,15 @@ def _run_chat_loop(app, settings: Settings, session: dict) -> None:
             break
 
         if question.startswith(MEMORY_COMMAND):
-            _handle_memory_command(settings, question)
+            _handle_memory_command(runtime.settings, question)
             continue
 
         try:
-            result = app.invoke(
-                {
-                    "question": question,
-                    "messages": messages,
-                }
-            )
+            result = runtime.ask(question)
         except Exception:
             logger.exception("Chat turn failed")
             print("本轮对话失败，请检查模型配置、网络或服务状态。")
             continue
-
-        messages = result.get("messages", messages)
-        session["messages"] = messages_to_dicts(messages)
-        save_session(settings, session)
 
         answer = result.get("tts_text", "")
         if answer:
