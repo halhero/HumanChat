@@ -41,6 +41,27 @@ def save_memory(path: Path, memory: LongTermMemory) -> None:
     )
 
 
+def add_memory_item(memory: LongTermMemory, category: str, text: str) -> bool:
+    items = _get_category_items(memory, category)
+    normalized = text.strip()
+    if not normalized or normalized in items:
+        return False
+    items.append(normalized)
+    return True
+
+
+def delete_memory_item(memory: LongTermMemory, category: str, index: int) -> str | None:
+    items = _get_category_items(memory, category)
+    zero_based_index = index - 1
+    if zero_based_index < 0 or zero_based_index >= len(items):
+        return None
+    return items.pop(zero_based_index)
+
+
+def get_memory_items(memory: LongTermMemory, category: str) -> list[str]:
+    return list(_get_category_items(memory, category))
+
+
 def format_memory_for_prompt(memory: LongTermMemory) -> str:
     sections = []
 
@@ -66,3 +87,30 @@ def _memory_to_dict(memory: LongTermMemory) -> dict:
     if hasattr(memory, "model_dump"):
         return memory.model_dump()
     return memory.dict()
+
+
+def _get_category_items(memory: LongTermMemory, category: str) -> list[str]:
+    normalized = _normalize_category(category)
+    if normalized == "preferences":
+        return memory.preferences
+    if normalized == "facts":
+        return memory.facts
+    if normalized == "notes":
+        return memory.notes
+    raise ValueError(f"Unsupported memory category: {category}")
+
+
+def _normalize_category(category: str) -> str:
+    normalized = category.strip().lower()
+    aliases = {
+        "preference": "preferences",
+        "preferences": "preferences",
+        "pref": "preferences",
+        "fact": "facts",
+        "facts": "facts",
+        "note": "notes",
+        "notes": "notes",
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Unsupported memory category: {category}")
+    return aliases[normalized]

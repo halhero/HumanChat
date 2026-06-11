@@ -1,6 +1,13 @@
 from human_chat.config import Settings, load_settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger, setup_logging
+from human_chat.memory_store import (
+    add_memory_item,
+    delete_memory_item,
+    format_memory_for_prompt,
+    load_memory,
+    save_memory,
+)
 from human_chat.session_store import (
     create_session,
     dicts_to_messages,
@@ -13,6 +20,7 @@ from human_chat.tts import start_tts_service, stop_tts_service
 
 
 EXIT_COMMANDS = {"exit", "quit", "q", "退出"}
+MEMORY_COMMAND = "/memory"
 logger = get_logger(__name__)
 
 
@@ -134,6 +142,10 @@ def _run_chat_loop(app, settings: Settings, session: dict) -> None:
             print("HumanChat 已退出。")
             break
 
+        if question.startswith(MEMORY_COMMAND):
+            _handle_memory_command(settings, question)
+            continue
+
         try:
             result = app.invoke(
                 {
@@ -157,3 +169,52 @@ def _run_chat_loop(app, settings: Settings, session: dict) -> None:
         tts_error = result.get("tts_error", "")
         if tts_error:
             print(f"语音生成失败：{tts_error}")
+
+
+def _handle_memory_command(settings: Settings, command: str) -> None:
+    parts = command.split(maxsplit=3)
+    memory = load_memory(settings.memory_path)
+
+    if len(parts) == 1:
+        print(format_memory_for_prompt(memory))
+        return
+
+    action = parts[1].lower()
+
+    if action == "add":
+        if len(parts) < 4:
+            print("用法：/memory add preference|fact|note 内容")
+            return
+        category = parts[2]
+        text = parts[3]
+        try:
+            added = add_memory_item(memory, category, text)
+        except ValueError as exc:
+            print(exc)
+            return
+        if not added:
+            print("记忆为空或已存在，未添加。")
+            return
+        save_memory(settings.memory_path, memory)
+        print("长期记忆已添加。")
+        return
+
+    if action == "delete":
+        if len(parts) < 4:
+            print("用法：/memory delete preference|fact|note 序号")
+            return
+        category = parts[2]
+        try:
+            index = int(parts[3])
+            deleted = delete_memory_item(memory, category, index)
+        except ValueError as exc:
+            print(exc)
+            return
+        if deleted is None:
+            print("未找到对应序号的长期记忆。")
+            return
+        save_memory(settings.memory_path, memory)
+        print(f"长期记忆已删除：{deleted}")
+        return
+
+    print("可用命令：/memory, /memory add ..., /memory delete ...")

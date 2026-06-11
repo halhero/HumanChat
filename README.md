@@ -104,6 +104,16 @@ Real memory files are ignored by Git; use `data/memory/user_profile.example.json
 
 Long-term memory is injected into the system prompt together with the selected character profile.
 
+During chat, manage long-term memory with:
+
+```text
+/memory
+/memory add preference 用户希望先看设计再改代码
+/memory add fact HumanChat 使用 LangGraph
+/memory add note 这是一条备注
+/memory delete preference 1
+```
+
 ## Run
 
 ```powershell
