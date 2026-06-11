@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 class ChatState(BaseModel):
     question: str = Field(description="User question.")
     messages: Annotated[list[Any], add_messages] = Field(default_factory=list)
+    memory_prompt: str = ""
+    assistant_text: str = ""
     tts_text: str = ""
     tts_error: str = ""
 

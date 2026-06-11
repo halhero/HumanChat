@@ -150,7 +150,7 @@ def _run_chat_loop(runtime: ChatRuntime) -> None:
             print("本轮对话失败，请检查模型配置、网络或服务状态。")
             continue
 
-        answer = result.get("tts_text", "")
+        answer = result.get("assistant_text") or result.get("tts_text", "")
         if answer:
             print(f"助手：{answer}")
 

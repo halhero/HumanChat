@@ -33,15 +33,17 @@ def _build_system_prompt(character, memory_prompt: str) -> str:
 def build_graph(settings: Settings | None = None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
-    memory = load_memory(settings.memory_path)
-    memory_prompt = format_memory_for_prompt(memory)
     llm = create_chat_model(settings)
     tts_client = TtsClient(settings, character)
 
-    def chat(state: ChatState):
+    def prepare_context(state: ChatState):
+        memory = load_memory(settings.memory_path)
+        return {"memory_prompt": format_memory_for_prompt(memory)}
+
+    def generate_reply(state: ChatState):
         prompt_template = ChatPromptTemplate.from_messages(
             [
-                ("system", _build_system_prompt(character, memory_prompt)),
+                ("system", _build_system_prompt(character, state.memory_prompt)),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]
@@ -55,6 +57,7 @@ def build_graph(settings: Settings | None = None):
         )
         logger.info("Generated assistant reply")
         return {
+            "assistant_text": response.text,
             "tts_text": response.text,
             "tts_error": "",
             "messages": [
@@ -63,18 +66,20 @@ def build_graph(settings: Settings | None = None):
             ],
         }
 
-    def generate_speech(state: ChatState):
+    def synthesize_speech(state: ChatState):
         try:
-            tts_client.synthesize_and_play(state.tts_text)
+            tts_client.synthesize_and_play(state.assistant_text)
         except TtsError as exc:
             logger.warning("TTS failed: %s", exc)
             return {"tts_error": str(exc)}
         return {"tts_error": ""}
 
     workflow = StateGraph(ChatState)
-    workflow.add_node("chat", chat)
-    workflow.add_node("generate_speech", generate_speech)
-    workflow.add_edge(START, "chat")
-    workflow.add_edge("chat", "generate_speech")
-    workflow.add_edge("generate_speech", END)
+    workflow.add_node("prepare_context", prepare_context)
+    workflow.add_node("generate_reply", generate_reply)
+    workflow.add_node("synthesize_speech", synthesize_speech)
+    workflow.add_edge(START, "prepare_context")
+    workflow.add_edge("prepare_context", "generate_reply")
+    workflow.add_edge("generate_reply", "synthesize_speech")
+    workflow.add_edge("synthesize_speech", END)
     return workflow.compile()

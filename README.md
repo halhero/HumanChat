@@ -104,6 +104,7 @@ If the file does not exist, HumanChat creates it from the built-in default memor
 Real memory files are ignored by Git; use `data/memory/user_profile.example.json` as a template.
 
 Long-term memory is injected into the system prompt together with the selected character profile.
+The graph reads long-term memory on each chat turn, so `/memory add` and `/memory delete` can affect later replies without restarting the app.
 
 During chat, manage long-term memory with:
 
