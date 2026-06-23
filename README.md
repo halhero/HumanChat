@@ -137,6 +137,7 @@ HumanChat includes safe, read-only project tools exposed as CLI commands:
 ```
 
 These tools are limited to files inside the project directory.
+The agent graph can also decide to call these read-only tools before generating a reply when a question requires project context.
 
 ## Run
 
