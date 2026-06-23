@@ -11,6 +11,7 @@ HumanChat/
     nanami.yaml           # Default character profile
   human_chat/
     character.py          # Character profile loading and validation
+    audio_recorder.py     # Microphone recording helper
     config.py             # Environment-based settings
     input_provider.py     # Text and audio-file input providers
     logging_config.py     # Logging setup helpers
@@ -160,14 +161,24 @@ HUMANCHAT_SESSION_DIR="data/sessions"
 
 ## Voice Input
 
-HumanChat supports a first version of multimodal input through audio files.
-On startup, choose `音频文件输入`, then enter an audio file path. The recognized text is sent through the same chat runtime as normal text input.
+HumanChat supports audio-file input and a first microphone input mode.
+On startup, choose `音频文件输入` or `麦克风输入`. The recognized text is sent through the same chat runtime as normal text input.
+
+Switch input mode during a chat:
+
+```text
+/input text
+/input audio-file
+/input mic
+```
 
 Configure STT with:
 
 ```env
 HUMANCHAT_STT_MODEL="whisper-1"
 HUMANCHAT_STT_BASE_URL=""
+HUMANCHAT_MIC_RECORD_SECONDS="5"
+HUMANCHAT_MIC_SAMPLE_RATE="16000"
 ```
 
 ## Next Milestones

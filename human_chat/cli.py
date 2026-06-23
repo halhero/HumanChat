@@ -1,5 +1,5 @@
 from human_chat.config import PROJECT_ROOT, Settings, load_settings
-from human_chat.input_provider import AudioFileInputProvider, TextInputProvider
+from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.runtime import ChatRuntime
 from human_chat.storage import JsonMemoryStore, JsonSessionStore
@@ -10,6 +10,7 @@ from human_chat.tools import list_project_files, read_project_file, search_proje
 EXIT_COMMANDS = {"exit", "quit", "q", "退出"}
 MEMORY_COMMAND = "/memory"
 TOOL_COMMANDS = {"/tools", "/files", "/read", "/search"}
+INPUT_COMMAND = "/input"
 logger = get_logger(__name__)
 
 
@@ -57,10 +58,14 @@ def _choose_input_provider(settings: Settings):
     print("请选择输入模式：")
     print("1. 文字输入")
     print("2. 音频文件输入")
+    print("3. 麦克风输入")
     choice = input("选择：").strip()
     if choice == "2":
         print("已启用音频文件输入。你仍可输入 /memory、/files、exit 等命令。")
         return AudioFileInputProvider(settings)
+    if choice == "3":
+        print("已启用麦克风输入。你仍可输入 /memory、/files、exit 等命令。")
+        return MicrophoneInputProvider(settings)
     return TextInputProvider()
 
 
@@ -151,6 +156,10 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             _handle_memory_command(runtime.settings, question)
             continue
 
+        if question.startswith(INPUT_COMMAND):
+            input_provider = _handle_input_command(runtime.settings, question, input_provider)
+            continue
+
         if _is_tool_command(question):
             _handle_tool_command(question)
             continue
@@ -220,6 +229,27 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         return
 
     print("可用命令：/memory, /memory add ..., /memory delete ...")
+
+
+def _handle_input_command(settings: Settings, command: str, current_provider):
+    parts = command.split(maxsplit=1)
+    if len(parts) < 2:
+        print("用法：/input text|audio-file|mic")
+        return current_provider
+
+    mode = parts[1].strip().lower()
+    if mode == "text":
+        print("已切换到文字输入。")
+        return TextInputProvider()
+    if mode == "audio-file":
+        print("已切换到音频文件输入。")
+        return AudioFileInputProvider(settings)
+    if mode == "mic":
+        print("已切换到麦克风输入。")
+        return MicrophoneInputProvider(settings)
+
+    print("未知输入模式。可用：text, audio-file, mic")
+    return current_provider
 
 
 def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> None:

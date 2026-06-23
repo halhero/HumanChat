@@ -37,8 +37,11 @@ class Settings(BaseModel):
     stt_model: str = "whisper-1"
     stt_base_url: str = ""
     memory_extraction_enabled: bool = True
+    mic_record_seconds: int = 5
+    mic_sample_rate: int = 16000
 
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
+    audio_temp_dir: Path = PROJECT_ROOT / "data" / "audio"
     memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
     speech_output_path: Path = PROJECT_ROOT / "speech" / "tmp.wav"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
@@ -69,7 +72,10 @@ def load_settings() -> Settings:
         stt_model=os.getenv("HUMANCHAT_STT_MODEL", "whisper-1"),
         stt_base_url=os.getenv("HUMANCHAT_STT_BASE_URL", ""),
         memory_extraction_enabled=_env_bool("HUMANCHAT_MEMORY_EXTRACTION_ENABLED", True),
+        mic_record_seconds=int(os.getenv("HUMANCHAT_MIC_RECORD_SECONDS", "5")),
+        mic_sample_rate=int(os.getenv("HUMANCHAT_MIC_SAMPLE_RATE", "16000")),
         character_path=_env_path("HUMANCHAT_CHARACTER_PATH", PROJECT_ROOT / "characters" / "nanami.yaml"),
+        audio_temp_dir=_env_path("HUMANCHAT_AUDIO_TEMP_DIR", PROJECT_ROOT / "data" / "audio"),
         memory_path=_env_path("HUMANCHAT_MEMORY_PATH", PROJECT_ROOT / "data" / "memory" / "user_profile.json"),
         speech_output_path=_env_path("HUMANCHAT_SPEECH_OUTPUT_PATH", PROJECT_ROOT / "speech" / "tmp.wav"),
         session_dir=_env_path("HUMANCHAT_SESSION_DIR", PROJECT_ROOT / "data" / "sessions"),
