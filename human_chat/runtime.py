@@ -3,17 +3,25 @@ from human_chat.graph import build_graph
 from human_chat.llm import create_chat_model
 from human_chat.logging_config import get_logger
 from human_chat.memory_extractor import extract_memory_candidates
-from human_chat.session_store import dicts_to_messages, messages_to_dicts, save_session
+from human_chat.session_store import dicts_to_messages, messages_to_dicts
+from human_chat.storage import JsonSessionStore
 
 
 logger = get_logger(__name__)
 
 
 class ChatRuntime:
-    def __init__(self, settings: Settings, session: dict | None = None, persist_session: bool = True):
+    def __init__(
+        self,
+        settings: Settings,
+        session: dict | None = None,
+        persist_session: bool = True,
+        session_store=None,
+    ):
         self.settings = settings
         self.session = session or {"messages": []}
         self.persist_session = persist_session
+        self.session_store = session_store or JsonSessionStore(settings)
         self.app = build_graph(settings)
         self.messages = dicts_to_messages(self.session.get("messages", []))
         self.memory_llm = create_chat_model(settings) if settings.memory_extraction_enabled else None
@@ -29,7 +37,7 @@ class ChatRuntime:
 
         if self.persist_session and "id" in self.session:
             self.session["messages"] = messages_to_dicts(self.messages)
-            save_session(self.settings, self.session)
+            self.session_store.save(self.session)
 
         result["memory_candidates"] = self._extract_memory_candidates(question, result)
         return result

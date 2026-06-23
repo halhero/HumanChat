@@ -6,8 +6,8 @@ from human_chat.character import load_character
 from human_chat.config import PROJECT_ROOT, Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
-from human_chat.memory_store import format_memory_for_prompt, load_memory
 from human_chat.schemas import ChatState, ToolDecision, TtsResponse
+from human_chat.storage import JsonMemoryStore
 from human_chat.tools import list_project_files, read_project_file, search_project_text
 from human_chat.tts import TtsClient, TtsError
 
@@ -52,12 +52,12 @@ def _format_tool_result_for_prompt(tool_result: str) -> str:
 def build_graph(settings: Settings | None = None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
+    memory_store = JsonMemoryStore(settings)
     llm = create_chat_model(settings)
     tts_client = TtsClient(settings, character)
 
     def prepare_context(state: ChatState):
-        memory = load_memory(settings.memory_path)
-        return {"memory_prompt": format_memory_for_prompt(memory)}
+        return {"memory_prompt": memory_store.format_for_prompt()}
 
     def decide_tool_use(state: ChatState):
         decision_llm = llm.with_structured_output(ToolDecision)

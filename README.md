@@ -20,6 +20,7 @@ HumanChat/
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
     stt.py                # Speech-to-text helpers
+    storage/              # JSON-backed storage adapters
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow

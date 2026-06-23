@@ -1,20 +1,8 @@
 from human_chat.config import PROJECT_ROOT, Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
-from human_chat.memory_store import (
-    add_memory_item,
-    delete_memory_item,
-    format_memory_for_prompt,
-    load_memory,
-    save_memory,
-)
 from human_chat.runtime import ChatRuntime
-from human_chat.session_store import (
-    create_session,
-    list_sessions,
-    load_session,
-    save_session,
-)
+from human_chat.storage import JsonMemoryStore, JsonSessionStore
 from human_chat.tts import start_tts_service, stop_tts_service
 from human_chat.tools import list_project_files, read_project_file, search_project_text
 
@@ -44,8 +32,9 @@ def chat_loop(settings: Settings | None = None) -> None:
     tts_process = _start_optional_tts(settings)
 
     try:
-        session = _choose_session(settings)
-        runtime = ChatRuntime(settings, session)
+        session_store = JsonSessionStore(settings)
+        session = _choose_session(session_store)
+        runtime = ChatRuntime(settings, session, session_store=session_store)
         input_provider = _choose_input_provider(settings)
         _run_chat_loop(runtime, input_provider)
     finally:
@@ -75,11 +64,11 @@ def _choose_input_provider(settings: Settings):
     return TextInputProvider()
 
 
-def _choose_session(settings: Settings) -> dict:
-    recent_sessions = list_sessions(settings, limit=10)
+def _choose_session(session_store: JsonSessionStore) -> dict:
+    recent_sessions = session_store.list_recent(limit=10)
 
     if not recent_sessions:
-        return _create_new_session(settings)
+        return _create_new_session(session_store)
 
     print("请选择会话：")
     print("1. 新建会话")
@@ -90,7 +79,7 @@ def _choose_session(settings: Settings) -> dict:
 
     if choice == "2":
         session_id = recent_sessions[0]["id"]
-        session = load_session(settings, session_id)
+        session = session_store.load(session_id)
         print(f"继续最近会话：{session_id}")
         return session
 
@@ -100,18 +89,17 @@ def _choose_session(settings: Settings) -> dict:
         session_id = _resolve_session_id(selected, recent_sessions)
 
         if session_id:
-            session = load_session(settings, session_id)
+            session = session_store.load(session_id)
             print(f"继续会话：{session_id}")
             return session
 
         print("未找到该会话，将创建新会话。")
 
-    return _create_new_session(settings)
+    return _create_new_session(session_store)
 
 
-def _create_new_session(settings: Settings) -> dict:
-    session = create_session()
-    save_session(settings, session)
+def _create_new_session(session_store: JsonSessionStore) -> dict:
+    session = session_store.create()
     print(f"已创建新会话：{session['id']}")
     return session
 
@@ -187,10 +175,10 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
 
 def _handle_memory_command(settings: Settings, command: str) -> None:
     parts = command.split(maxsplit=3)
-    memory = load_memory(settings.memory_path)
+    memory_store = JsonMemoryStore(settings)
 
     if len(parts) == 1:
-        print(format_memory_for_prompt(memory))
+        print(memory_store.format_for_prompt())
         return
 
     action = parts[1].lower()
@@ -202,7 +190,7 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         category = parts[2]
         text = parts[3]
         try:
-            added = add_memory_item(memory, category, text)
+            added = memory_store.add(category, text)
         except ValueError as exc:
             print(exc)
             return
@@ -220,7 +208,7 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         category = parts[2]
         try:
             index = int(parts[3])
-            deleted = delete_memory_item(memory, category, index)
+            deleted = memory_store.delete(category, index)
         except ValueError as exc:
             print(exc)
             return
@@ -238,8 +226,7 @@ def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> No
     if not candidates:
         return
 
-    memory = load_memory(settings.memory_path)
-    changed = False
+    memory_store = JsonMemoryStore(settings)
 
     print("发现候选长期记忆：")
     for index, candidate in enumerate(candidates, start=1):
@@ -254,19 +241,15 @@ def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> No
             continue
 
         try:
-            added = add_memory_item(memory, category, text)
+            added = memory_store.add(category, text)
         except ValueError as exc:
             print(exc)
             continue
 
         if added:
-            changed = True
             print("已加入长期记忆。")
         else:
             print("记忆为空或已存在，未添加。")
-
-    if changed:
-        save_memory(settings.memory_path, memory)
 
 
 def _is_tool_command(command: str) -> bool:
