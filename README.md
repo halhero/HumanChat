@@ -119,6 +119,12 @@ During chat, manage long-term memory with:
 /memory delete preference 1
 ```
 
+When enabled, HumanChat also proposes long-term memory candidates after each normal chat turn and asks for confirmation before saving:
+
+```env
+HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
+```
+
 ## Project Tools
 
 HumanChat includes safe, read-only project tools exposed as CLI commands:

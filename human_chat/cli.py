@@ -178,6 +178,8 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
         if answer:
             print(f"助手：{answer}")
 
+        _confirm_memory_candidates(runtime.settings, result.get("memory_candidates", []))
+
         tts_error = result.get("tts_error", "")
         if tts_error:
             print(f"语音生成失败：{tts_error}")
@@ -230,6 +232,41 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         return
 
     print("可用命令：/memory, /memory add ..., /memory delete ...")
+
+
+def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> None:
+    if not candidates:
+        return
+
+    memory = load_memory(settings.memory_path)
+    changed = False
+
+    print("发现候选长期记忆：")
+    for index, candidate in enumerate(candidates, start=1):
+        category = candidate.get("category", "note")
+        text = candidate.get("text", "").strip()
+        if not text:
+            continue
+
+        print(f"{index}. {category}: {text}")
+        choice = input("保存这条记忆？y/N：").strip().lower()
+        if choice != "y":
+            continue
+
+        try:
+            added = add_memory_item(memory, category, text)
+        except ValueError as exc:
+            print(exc)
+            continue
+
+        if added:
+            changed = True
+            print("已加入长期记忆。")
+        else:
+            print("记忆为空或已存在，未添加。")
+
+    if changed:
+        save_memory(settings.memory_path, memory)
 
 
 def _is_tool_command(command: str) -> bool:
