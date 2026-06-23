@@ -41,6 +41,13 @@ Install dependencies in your project environment:
 pip install -r requirements.txt
 ```
 
+For development and tests:
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
 Create your local `.env` from `.env.example`, then fill in the real values:
 
 ```powershell
@@ -183,7 +190,7 @@ HUMANCHAT_MIC_SAMPLE_RATE="16000"
 
 ## Next Milestones
 
-1. Add automatic memory extraction from chat turns.
-2. Add voice input for spoken conversations.
-3. Add tool-calling nodes to the LangGraph workflow.
-4. Add a simple UI after the core runtime is stable.
+1. Expand automated tests to runtime and graph behavior with mocked models.
+2. Add SQLite-backed storage adapters.
+3. Improve automatic memory extraction quality and review UX.
+4. Build a simple UI after the core runtime is stable.
