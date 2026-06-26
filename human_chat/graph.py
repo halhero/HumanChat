@@ -49,7 +49,7 @@ def _format_tool_messages_for_prompt(tool_messages: list) -> str:
     return "以下是本轮工具返回的项目上下文：\n" + "\n\n".join(results)
 
 
-def build_graph(settings: Settings | None = None):
+def build_graph(settings: Settings | None = None, checkpointer=None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
     memory_store = JsonMemoryStore(settings)
@@ -140,4 +140,6 @@ def build_graph(settings: Settings | None = None):
     workflow.add_edge("execute_project_tools", "generate_reply")
     workflow.add_edge("generate_reply", "synthesize_speech")
     workflow.add_edge("synthesize_speech", END)
+    if checkpointer is not None:
+        return workflow.compile(checkpointer=checkpointer)
     return workflow.compile()
