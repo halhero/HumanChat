@@ -1,14 +1,15 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
 
 from human_chat.character import load_character
-from human_chat.config import PROJECT_ROOT, Settings, load_settings
+from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
-from human_chat.schemas import ChatState, ToolDecision, TtsResponse
+from human_chat.schemas import ChatState, TtsResponse
 from human_chat.storage import JsonMemoryStore
-from human_chat.tools import list_project_files, read_project_file, search_project_text
+from human_chat.tools import get_project_tools
 from human_chat.tts import TtsClient, TtsError
 
 
@@ -20,16 +21,10 @@ STRUCTURED_OUTPUT_INSTRUCTION = """
 {"text": "你的回答"}
 """
 
-TOOL_DECISION_PROMPT = """
-你需要判断本轮用户问题是否需要读取当前项目文件才能可靠回答。
-
-可用工具：
-- list_project_files: 列出项目文件，不需要参数。
-- read_project_file: 读取项目内文本文件，参数 path。
-- search_project_text: 搜索项目文本，参数 query。
-
-只有当问题明确需要项目代码、文件内容、当前实现细节时才使用工具。
-如果不需要工具，need_tool=false。
+TOOL_CALLING_PROMPT = """
+你可以使用项目只读工具获取 HumanChat 当前代码上下文。
+只有当用户问题需要查看项目文件、搜索代码或理解当前实现时才调用工具。
+如果不需要工具，请直接回复一条简短说明，不要调用工具。
 """
 
 
@@ -43,10 +38,15 @@ def _build_system_prompt(character, memory_prompt: str) -> str:
     )
 
 
-def _format_tool_result_for_prompt(tool_result: str) -> str:
-    if not tool_result:
+def _format_tool_messages_for_prompt(tool_messages: list) -> str:
+    results = [
+        str(message.content)
+        for message in tool_messages
+        if getattr(message, "type", "") == "tool"
+    ]
+    if not results:
         return "本轮没有调用工具。"
-    return f"以下是本轮工具返回的项目上下文：\n{tool_result}"
+    return "以下是本轮工具返回的项目上下文：\n" + "\n\n".join(results)
 
 
 def build_graph(settings: Settings | None = None):
@@ -54,54 +54,35 @@ def build_graph(settings: Settings | None = None):
     character = load_character(settings.character_path)
     memory_store = JsonMemoryStore(settings)
     llm = create_chat_model(settings)
+    project_tools = get_project_tools()
+    tool_llm = llm.bind_tools(project_tools)
+    tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)
 
     def prepare_context(state: ChatState):
         return {"memory_prompt": memory_store.format_for_prompt()}
 
-    def decide_tool_use(state: ChatState):
-        decision_llm = llm.with_structured_output(ToolDecision)
-        decision = decision_llm.invoke(
+    def call_project_tools_model(state: ChatState):
+        response = tool_llm.invoke(
             [
                 HumanMessage(
                     content=(
-                        f"{TOOL_DECISION_PROMPT}\n\n"
+                        f"{TOOL_CALLING_PROMPT}\n\n"
                         f"用户问题：\n{state.question}"
                     )
                 )
             ]
         )
-        return {"tool_request": decision.dict()}
+        return {"tool_messages": [response]}
 
-    def execute_tool(state: ChatState):
-        request = state.tool_request or {}
-        tool_name = request.get("tool_name", "")
-        arguments = request.get("arguments", {})
-
-        try:
-            if tool_name == "list_project_files":
-                files = list_project_files(PROJECT_ROOT, limit=80)
-                return {"tool_result": "\n".join(files)}
-
-            if tool_name == "read_project_file":
-                content = read_project_file(PROJECT_ROOT, arguments.get("path", ""))
-                return {"tool_result": content}
-
-            if tool_name == "search_project_text":
-                matches = search_project_text(PROJECT_ROOT, arguments.get("query", ""), limit=40)
-                lines = [f"{item['path']}:{item['line']}: {item['text']}" for item in matches]
-                return {"tool_result": "\n".join(lines) if lines else "未找到匹配内容。"}
-
-            return {"tool_result": f"未知工具：{tool_name}"}
-        except Exception as exc:
-            logger.warning("Tool execution failed: %s", exc)
-            return {"tool_result": f"工具调用失败：{exc}"}
+    def execute_project_tools(state: ChatState):
+        return tool_node.invoke({"tool_messages": state.tool_messages})
 
     def generate_reply(state: ChatState):
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", _build_system_prompt(character, state.memory_prompt)),
-                ("system", _format_tool_result_for_prompt(state.tool_result)),
+                ("system", _format_tool_messages_for_prompt(state.tool_messages)),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]
@@ -132,28 +113,31 @@ def build_graph(settings: Settings | None = None):
             return {"tts_error": str(exc)}
         return {"tts_error": ""}
 
-    def route_after_tool_decision(state: ChatState):
-        if (state.tool_request or {}).get("need_tool"):
-            return "execute_tool"
+    def route_after_tool_model(state: ChatState):
+        if not state.tool_messages:
+            return "generate_reply"
+        last_message = state.tool_messages[-1]
+        if getattr(last_message, "tool_calls", None):
+            return "execute_project_tools"
         return "generate_reply"
 
     workflow = StateGraph(ChatState)
     workflow.add_node("prepare_context", prepare_context)
-    workflow.add_node("decide_tool_use", decide_tool_use)
-    workflow.add_node("execute_tool", execute_tool)
+    workflow.add_node("call_project_tools_model", call_project_tools_model)
+    workflow.add_node("execute_project_tools", execute_project_tools)
     workflow.add_node("generate_reply", generate_reply)
     workflow.add_node("synthesize_speech", synthesize_speech)
     workflow.add_edge(START, "prepare_context")
-    workflow.add_edge("prepare_context", "decide_tool_use")
+    workflow.add_edge("prepare_context", "call_project_tools_model")
     workflow.add_conditional_edges(
-        "decide_tool_use",
-        route_after_tool_decision,
+        "call_project_tools_model",
+        route_after_tool_model,
         {
-            "execute_tool": "execute_tool",
+            "execute_project_tools": "execute_project_tools",
             "generate_reply": "generate_reply",
         },
     )
-    workflow.add_edge("execute_tool", "generate_reply")
+    workflow.add_edge("execute_project_tools", "generate_reply")
     workflow.add_edge("generate_reply", "synthesize_speech")
     workflow.add_edge("synthesize_speech", END)
     return workflow.compile()
