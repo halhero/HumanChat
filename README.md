@@ -179,6 +179,15 @@ Switch input mode during a chat:
 /input mic
 ```
 
+Enable lightweight graph debugging during a chat:
+
+```text
+/debug on
+/debug off
+```
+
+Debug mode prints the returned graph state summary after each chat turn.
+
 Configure STT with:
 
 ```env

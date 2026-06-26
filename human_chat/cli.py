@@ -11,6 +11,7 @@ EXIT_COMMANDS = {"exit", "quit", "q", "退出"}
 MEMORY_COMMAND = "/memory"
 TOOL_COMMANDS = {"/tools", "/files", "/read", "/search"}
 INPUT_COMMAND = "/input"
+DEBUG_COMMAND = "/debug"
 logger = get_logger(__name__)
 
 
@@ -134,6 +135,7 @@ def _resolve_session_id(value: str, sessions: list[dict]) -> str | None:
 
 
 def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
+    debug_enabled = False
     print(f"HumanChat 已启动，会话：{runtime.session['id']}")
     print("输入 exit / quit / q / 退出 可结束。")
 
@@ -160,6 +162,10 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             input_provider = _handle_input_command(runtime.settings, question, input_provider)
             continue
 
+        if question.startswith(DEBUG_COMMAND):
+            debug_enabled = _handle_debug_command(question, debug_enabled)
+            continue
+
         if _is_tool_command(question):
             _handle_tool_command(question)
             continue
@@ -180,6 +186,9 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
         tts_error = result.get("tts_error", "")
         if tts_error:
             print(f"语音生成失败：{tts_error}")
+
+        if debug_enabled:
+            _print_debug_summary(result)
 
 
 def _handle_memory_command(settings: Settings, command: str) -> None:
@@ -250,6 +259,35 @@ def _handle_input_command(settings: Settings, command: str, current_provider):
 
     print("未知输入模式。可用：text, audio-file, mic")
     return current_provider
+
+
+def _handle_debug_command(command: str, current_value: bool) -> bool:
+    parts = command.split(maxsplit=1)
+    if len(parts) < 2:
+        print(f"当前调试模式：{'on' if current_value else 'off'}")
+        print("用法：/debug on|off")
+        return current_value
+
+    value = parts[1].strip().lower()
+    if value == "on":
+        print("调试模式已开启。")
+        return True
+    if value == "off":
+        print("调试模式已关闭。")
+        return False
+
+    print("用法：/debug on|off")
+    return current_value
+
+
+def _print_debug_summary(result: dict) -> None:
+    print("[debug] Graph result summary:")
+    print(f"[debug] keys={sorted(result.keys())}")
+    print(f"[debug] messages={len(result.get('messages', []))}")
+    print(f"[debug] tool_messages={len(result.get('tool_messages', []))}")
+    print(f"[debug] memory_candidates={len(result.get('memory_candidates', []))}")
+    if result.get("tts_error"):
+        print(f"[debug] tts_error={result['tts_error']}")
 
 
 def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> None:
