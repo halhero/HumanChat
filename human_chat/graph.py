@@ -8,7 +8,7 @@ from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
 from human_chat.schemas import ChatState, TtsResponse
-from human_chat.storage import JsonMemoryStore
+from human_chat.storage import create_memory_store
 from human_chat.tools import get_project_tools
 from human_chat.tts import TtsClient, TtsError
 
@@ -52,7 +52,7 @@ def _format_tool_messages_for_prompt(tool_messages: list) -> str:
 def build_graph(settings: Settings | None = None, checkpointer=None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
-    memory_store = JsonMemoryStore(settings)
+    memory_store = create_memory_store(settings)
     llm = create_chat_model(settings)
     project_tools = get_project_tools()
     tool_llm = llm.bind_tools(project_tools)

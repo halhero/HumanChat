@@ -2,7 +2,7 @@ from human_chat.config import PROJECT_ROOT, Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.runtime import ChatRuntime
-from human_chat.storage import JsonMemoryStore, JsonSessionStore
+from human_chat.storage import JsonSessionStore, create_memory_store, create_session_store
 from human_chat.tts import start_tts_service, stop_tts_service
 from human_chat.tools import list_project_files, read_project_file, search_project_text
 
@@ -33,7 +33,7 @@ def chat_loop(settings: Settings | None = None) -> None:
     tts_process = _start_optional_tts(settings)
 
     try:
-        session_store = JsonSessionStore(settings)
+        session_store = create_session_store(settings)
         session = _choose_session(session_store)
         runtime = ChatRuntime(settings, session, session_store=session_store)
         input_provider = _choose_input_provider(settings)
@@ -184,7 +184,7 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
 
 def _handle_memory_command(settings: Settings, command: str) -> None:
     parts = command.split(maxsplit=3)
-    memory_store = JsonMemoryStore(settings)
+    memory_store = create_memory_store(settings)
 
     if len(parts) == 1:
         print(memory_store.format_for_prompt())
@@ -256,7 +256,7 @@ def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> No
     if not candidates:
         return
 
-    memory_store = JsonMemoryStore(settings)
+    memory_store = create_memory_store(settings)
 
     print("发现候选长期记忆：")
     for index, candidate in enumerate(candidates, start=1):

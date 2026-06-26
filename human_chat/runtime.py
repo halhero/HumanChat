@@ -5,7 +5,7 @@ from human_chat.llm import create_chat_model
 from human_chat.logging_config import get_logger
 from human_chat.memory_extractor import extract_memory_candidates
 from human_chat.session_store import dicts_to_messages, messages_to_dicts
-from human_chat.storage import JsonSessionStore
+from human_chat.storage import create_session_store
 
 
 logger = get_logger(__name__)
@@ -23,7 +23,7 @@ class ChatRuntime:
         self.settings = settings
         self.session = session or {"messages": []}
         self.persist_session = persist_session
-        self.session_store = session_store or JsonSessionStore(settings)
+        self.session_store = session_store or create_session_store(settings)
         self.thread_id = self.session.get("id", "run_once")
         self.checkpointer = checkpointer or create_checkpointer()
         self.app = build_graph(settings, checkpointer=self.checkpointer)
