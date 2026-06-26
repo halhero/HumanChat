@@ -97,7 +97,6 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
         logger.info("Generated assistant reply")
         return {
             "assistant_text": response.text,
-            "tts_text": response.text,
             "tts_error": "",
             "messages": [
                 HumanMessage(content=state.question),

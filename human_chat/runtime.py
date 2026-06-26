@@ -52,7 +52,7 @@ class ChatRuntime:
         if self.memory_llm is None:
             return []
 
-        assistant_text = result.get("assistant_text") or result.get("tts_text", "")
+        assistant_text = result.get("assistant_text", "")
         if not assistant_text:
             return []
 
