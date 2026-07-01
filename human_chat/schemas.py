@@ -8,6 +8,7 @@ class ChatState(BaseModel):
     question: str = Field(description="User question.")
     messages: Annotated[list[Any], add_messages] = Field(default_factory=list)
     tool_messages: Annotated[list[Any], add_messages] = Field(default_factory=list)
+    tool_call_count: int = 0
     memory_prompt: str = ""
     assistant_text: str = ""
     tts_error: str = ""

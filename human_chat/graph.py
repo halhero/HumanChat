@@ -24,8 +24,11 @@ STRUCTURED_OUTPUT_INSTRUCTION = """
 TOOL_CALLING_PROMPT = """
 你可以使用项目只读工具获取 HumanChat 当前代码上下文。
 只有当用户问题需要查看项目文件、搜索代码或理解当前实现时才调用工具。
-如果不需要工具，请直接回复一条简短说明，不要调用工具。
+如果工具结果仍不足以回答，可以继续调用工具。
+如果不需要工具，或者已经收集到足够信息，请直接给出简短结论，不要调用工具。
 """
+
+MAX_TOOL_CALL_ROUNDS = 3
 
 
 def _build_system_prompt(character, memory_prompt: str) -> str:
@@ -49,6 +52,19 @@ def _format_tool_messages_for_prompt(tool_messages: list) -> str:
     return "以下是本轮工具返回的项目上下文：\n" + "\n\n".join(results)
 
 
+def _build_tool_user_prompt(question: str) -> str:
+    return f"{TOOL_CALLING_PROMPT}\n\n用户问题：\n{question}"
+
+
+def _latest_tool_conversation(tool_messages: list, question: str) -> list:
+    user_prompt = _build_tool_user_prompt(question)
+    for index in range(len(tool_messages) - 1, -1, -1):
+        message = tool_messages[index]
+        if isinstance(message, HumanMessage) and message.content == user_prompt:
+            return tool_messages[index:]
+    return []
+
+
 def build_graph(settings: Settings | None = None, checkpointer=None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
@@ -61,29 +77,34 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     tts_client = TtsClient(settings, character)
 
     def prepare_context(state: ChatState):
-        return {"memory_prompt": memory_store.format_for_prompt()}
+        return {
+            "memory_prompt": memory_store.format_for_prompt(),
+            "tool_call_count": 0,
+        }
 
-    def call_project_tools_model(state: ChatState):
-        response = tool_llm.invoke(
-            [
-                HumanMessage(
-                    content=(
-                        f"{TOOL_CALLING_PROMPT}\n\n"
-                        f"用户问题：\n{state.question}"
-                    )
-                )
-            ]
-        )
-        return {"tool_messages": [response]}
+    def call_agent_model(state: ChatState):
+        conversation = _latest_tool_conversation(state.tool_messages, state.question)
+        updates = []
+        if not conversation:
+            human_message = HumanMessage(content=_build_tool_user_prompt(state.question))
+            conversation = [human_message]
+            updates.append(human_message)
+
+        response = tool_llm.invoke(conversation)
+        updates.append(response)
+        return {"tool_messages": updates}
 
     def execute_project_tools(state: ChatState):
-        return tool_node.invoke({"tool_messages": state.tool_messages})
+        result = tool_node.invoke({"tool_messages": state.tool_messages})
+        result["tool_call_count"] = state.tool_call_count + 1
+        return result
 
     def generate_reply(state: ChatState):
+        current_tool_messages = _latest_tool_conversation(state.tool_messages, state.question)
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", _build_system_prompt(character, state.memory_prompt)),
-                ("system", _format_tool_messages_for_prompt(state.tool_messages)),
+                ("system", _format_tool_messages_for_prompt(current_tool_messages)),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]
@@ -113,31 +134,31 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             return {"tts_error": str(exc)}
         return {"tts_error": ""}
 
-    def route_after_tool_model(state: ChatState):
+    def route_after_agent_model(state: ChatState):
         if not state.tool_messages:
             return "generate_reply"
         last_message = state.tool_messages[-1]
-        if getattr(last_message, "tool_calls", None):
+        if getattr(last_message, "tool_calls", None) and state.tool_call_count < MAX_TOOL_CALL_ROUNDS:
             return "execute_project_tools"
         return "generate_reply"
 
     workflow = StateGraph(ChatState)
     workflow.add_node("prepare_context", prepare_context)
-    workflow.add_node("call_project_tools_model", call_project_tools_model)
+    workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
     workflow.add_node("generate_reply", generate_reply)
     workflow.add_node("synthesize_speech", synthesize_speech)
     workflow.add_edge(START, "prepare_context")
-    workflow.add_edge("prepare_context", "call_project_tools_model")
+    workflow.add_edge("prepare_context", "call_agent_model")
     workflow.add_conditional_edges(
-        "call_project_tools_model",
-        route_after_tool_model,
+        "call_agent_model",
+        route_after_agent_model,
         {
             "execute_project_tools": "execute_project_tools",
             "generate_reply": "generate_reply",
         },
     )
-    workflow.add_edge("execute_project_tools", "generate_reply")
+    workflow.add_edge("execute_project_tools", "call_agent_model")
     workflow.add_edge("generate_reply", "synthesize_speech")
     workflow.add_edge("synthesize_speech", END)
     if checkpointer is not None:
