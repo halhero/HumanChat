@@ -3,9 +3,11 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from human_chat.config import PROJECT_ROOT
+from human_chat.logging_config import get_logger
 
 
 IGNORED_DIRS = {".git", ".idea", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+logger = get_logger(__name__)
 
 
 def list_project_files(root: Path, limit: int = 100) -> list[str]:
@@ -68,22 +70,19 @@ def search_project_text(root: Path, query: str, limit: int = 50) -> list[dict]:
 @tool("list_project_files")
 def list_project_files_tool() -> str:
     """List readable files inside the HumanChat project."""
-    return "\n".join(list_project_files(PROJECT_ROOT, limit=100))
+    return _run_project_tool("list_project_files", lambda: "\n".join(list_project_files(PROJECT_ROOT, limit=100)))
 
 
 @tool("read_project_file")
 def read_project_file_tool(path: str) -> str:
     """Read a UTF-8 text file inside the HumanChat project."""
-    return read_project_file(PROJECT_ROOT, path)
+    return _run_project_tool("read_project_file", lambda: read_project_file(PROJECT_ROOT, path))
 
 
 @tool("search_project_text")
 def search_project_text_tool(query: str) -> str:
     """Search for exact text inside UTF-8 files in the HumanChat project."""
-    matches = search_project_text(PROJECT_ROOT, query, limit=50)
-    if not matches:
-        return "未找到匹配内容。"
-    return "\n".join(f"{item['path']}:{item['line']}: {item['text']}" for item in matches)
+    return _run_project_tool("search_project_text", lambda: _format_search_results(query))
 
 
 def get_project_tools():
@@ -92,6 +91,21 @@ def get_project_tools():
         read_project_file_tool,
         search_project_text_tool,
     ]
+
+
+def _run_project_tool(tool_name: str, callback):
+    try:
+        return callback()
+    except Exception as exc:
+        logger.warning("Project tool failed: %s", tool_name, exc_info=True)
+        return f"[tool_error] {tool_name}: {exc}"
+
+
+def _format_search_results(query: str) -> str:
+    matches = search_project_text(PROJECT_ROOT, query, limit=50)
+    if not matches:
+        return "未找到匹配内容。"
+    return "\n".join(f"{item['path']}:{item['line']}: {item['text']}" for item in matches)
 
 
 def _resolve_project_path(root: Path, file_path: str) -> Path:

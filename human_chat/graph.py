@@ -52,6 +52,12 @@ def _format_tool_messages_for_prompt(tool_messages: list) -> str:
     return "以下是本轮工具返回的项目上下文：\n" + "\n\n".join(results)
 
 
+def _format_tool_limit_notice(state: ChatState) -> str:
+    if not state.tool_limit_reached:
+        return ""
+    return "\n\n注意：本轮工具调用已达到上限，请基于已经获得的工具结果回答。"
+
+
 def _build_tool_user_prompt(question: str) -> str:
     return f"{TOOL_CALLING_PROMPT}\n\n用户问题：\n{question}"
 
@@ -63,6 +69,39 @@ def _latest_tool_conversation(tool_messages: list, question: str) -> list:
         if isinstance(message, HumanMessage) and message.content == user_prompt:
             return tool_messages[index:]
     return []
+
+
+def _tool_call_name(tool_call) -> str:
+    if isinstance(tool_call, dict):
+        return tool_call.get("name", "unknown_tool")
+    return getattr(tool_call, "name", "unknown_tool")
+
+
+def _tool_call_args(tool_call):
+    if isinstance(tool_call, dict):
+        return tool_call.get("args", {})
+    return getattr(tool_call, "args", {})
+
+
+def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dict]:
+    if not state.tool_messages:
+        return []
+    last_message = state.tool_messages[-1]
+    tool_calls = getattr(last_message, "tool_calls", []) or []
+    events = []
+    for index, tool_call in enumerate(tool_calls):
+        result_message = tool_result_messages[index] if index < len(tool_result_messages) else None
+        content = str(getattr(result_message, "content", ""))
+        events.append(
+            {
+                "round": state.tool_call_count + 1,
+                "tool": _tool_call_name(tool_call),
+                "arguments": _tool_call_args(tool_call),
+                "status": "error" if content.startswith("[tool_error]") else "success",
+                "result_preview": content[:300],
+            }
+        )
+    return events
 
 
 def build_graph(settings: Settings | None = None, checkpointer=None):
@@ -81,6 +120,8 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             "memory_prompt": memory_store.format_for_prompt(),
             "tool_messages": [],
             "tool_call_count": 0,
+            "tool_events": [],
+            "tool_limit_reached": False,
         }
 
     def call_agent_model(state: ChatState):
@@ -98,14 +139,19 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
         return {
             "tool_messages": [*state.tool_messages, *tool_result_messages],
             "tool_call_count": state.tool_call_count + 1,
+            "tool_events": [*state.tool_events, *_build_tool_events(state, tool_result_messages)],
         }
 
     def generate_reply(state: ChatState):
         current_tool_messages = _latest_tool_conversation(state.tool_messages, state.question)
+        tool_context = (
+            _format_tool_messages_for_prompt(current_tool_messages)
+            + _format_tool_limit_notice(state)
+        )
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", _build_system_prompt(character, state.memory_prompt)),
-                ("system", _format_tool_messages_for_prompt(current_tool_messages)),
+                ("system", tool_context),
                 MessagesPlaceholder("messages"),
                 ("human", "{question}"),
             ]
@@ -135,11 +181,28 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             return {"tts_error": str(exc)}
         return {"tts_error": ""}
 
+    def mark_tool_limit_reached(state: ChatState):
+        return {
+            "tool_limit_reached": True,
+            "tool_events": [
+                *state.tool_events,
+                {
+                    "round": state.tool_call_count,
+                    "tool": "tool_loop",
+                    "arguments": {},
+                    "status": "limit_reached",
+                    "result_preview": f"达到最大工具调用轮数：{MAX_TOOL_CALL_ROUNDS}",
+                },
+            ],
+        }
+
     def route_after_agent_model(state: ChatState):
         if not state.tool_messages:
             return "generate_reply"
         last_message = state.tool_messages[-1]
-        if getattr(last_message, "tool_calls", None) and state.tool_call_count < MAX_TOOL_CALL_ROUNDS:
+        if getattr(last_message, "tool_calls", None):
+            if state.tool_call_count >= MAX_TOOL_CALL_ROUNDS:
+                return "mark_tool_limit_reached"
             return "execute_project_tools"
         return "generate_reply"
 
@@ -149,6 +212,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     workflow.add_node("execute_project_tools", execute_project_tools)
     workflow.add_node("generate_reply", generate_reply)
     workflow.add_node("synthesize_speech", synthesize_speech)
+    workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
     workflow.add_edge(START, "prepare_context")
     workflow.add_edge("prepare_context", "call_agent_model")
     workflow.add_conditional_edges(
@@ -156,10 +220,12 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
         route_after_agent_model,
         {
             "execute_project_tools": "execute_project_tools",
+            "mark_tool_limit_reached": "mark_tool_limit_reached",
             "generate_reply": "generate_reply",
         },
     )
     workflow.add_edge("execute_project_tools", "call_agent_model")
+    workflow.add_edge("mark_tool_limit_reached", "generate_reply")
     workflow.add_edge("generate_reply", "synthesize_speech")
     workflow.add_edge("synthesize_speech", END)
     if checkpointer is not None:
