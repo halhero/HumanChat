@@ -79,25 +79,26 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     def prepare_context(state: ChatState):
         return {
             "memory_prompt": memory_store.format_for_prompt(),
+            "tool_messages": [],
             "tool_call_count": 0,
         }
 
     def call_agent_model(state: ChatState):
         conversation = _latest_tool_conversation(state.tool_messages, state.question)
-        updates = []
         if not conversation:
             human_message = HumanMessage(content=_build_tool_user_prompt(state.question))
             conversation = [human_message]
-            updates.append(human_message)
 
         response = tool_llm.invoke(conversation)
-        updates.append(response)
-        return {"tool_messages": updates}
+        return {"tool_messages": [*conversation, response]}
 
     def execute_project_tools(state: ChatState):
         result = tool_node.invoke({"tool_messages": state.tool_messages})
-        result["tool_call_count"] = state.tool_call_count + 1
-        return result
+        tool_result_messages = result.get("tool_messages", [])
+        return {
+            "tool_messages": [*state.tool_messages, *tool_result_messages],
+            "tool_call_count": state.tool_call_count + 1,
+        }
 
     def generate_reply(state: ChatState):
         current_tool_messages = _latest_tool_conversation(state.tool_messages, state.question)
