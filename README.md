@@ -136,7 +136,8 @@ HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
 
 ## Project Tools
 
-HumanChat includes safe, read-only project tools exposed as CLI commands:
+HumanChat includes safe, read-only project tools exposed through the shared tool provider.
+The agent graph and the CLI commands use the same tool source:
 
 ```text
 /tools
@@ -146,7 +147,8 @@ HumanChat includes safe, read-only project tools exposed as CLI commands:
 ```
 
 These tools are limited to files inside the project directory.
-The agent graph can also decide to call these read-only tools before generating a reply when a question requires project context.
+The agent graph can decide to call these read-only tools before generating a reply when a question requires project context.
+In chat, `/tools` shows the currently registered tool metadata, including source, safety level, and usage.
 
 ## Run
 

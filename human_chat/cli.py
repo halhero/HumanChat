@@ -1,10 +1,10 @@
-from human_chat.config import PROJECT_ROOT, Settings, load_settings
+from human_chat.config import Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.runtime import ChatRuntime
 from human_chat.storage import JsonSessionStore, create_memory_store, create_session_store
+from human_chat.tool_provider import ToolMetadata, create_tool_provider
 from human_chat.tts import start_tts_service, stop_tts_service
-from human_chat.tools import list_project_files, read_project_file, search_project_text
 
 
 EXIT_COMMANDS = {"exit", "quit", "q", "退出"}
@@ -167,7 +167,7 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             continue
 
         if _is_tool_command(question):
-            _handle_tool_command(question)
+            _handle_tool_command(runtime.settings, question)
             continue
 
         try:
@@ -334,36 +334,52 @@ def _is_tool_command(command: str) -> bool:
     return command.split(maxsplit=1)[0] in TOOL_COMMANDS
 
 
-def _handle_tool_command(command: str) -> None:
+def _handle_tool_command(settings: Settings, command: str) -> None:
+    tool_provider = create_tool_provider(settings)
     parts = command.split(maxsplit=1)
     action = parts[0]
 
     if action == "/tools":
-        print("可用工具命令：/files, /read 路径, /search 关键词")
+        _print_tool_commands(tool_provider.describe_tools())
         return
 
-    if action == "/files":
-        for path in list_project_files(PROJECT_ROOT):
-            print(path)
+    metadata = tool_provider.get_metadata_by_command(action)
+    if metadata is None:
+        print("未知工具命令。输入 /tools 查看可用工具。")
         return
 
-    if action == "/read":
-        if len(parts) < 2:
-            print("用法：/read human_chat/graph.py")
-            return
-        try:
-            print(read_project_file(PROJECT_ROOT, parts[1]))
-        except ValueError as exc:
-            print(exc)
+    arguments = _build_cli_tool_arguments(metadata, parts[1] if len(parts) > 1 else "")
+    if arguments is None:
+        print(f"用法：{metadata.usage}")
         return
 
-    if action == "/search":
-        if len(parts) < 2:
-            print("用法：/search memory")
-            return
-        matches = search_project_text(PROJECT_ROOT, parts[1])
-        if not matches:
-            print("未找到匹配内容。")
-            return
-        for match in matches:
-            print(f"{match['path']}:{match['line']}: {match['text']}")
+    try:
+        print(tool_provider.invoke_tool(metadata.name, arguments))
+    except Exception as exc:
+        logger.exception("CLI tool command failed")
+        print(f"工具执行失败：{exc}")
+
+
+def _print_tool_commands(metadata: list[ToolMetadata]) -> None:
+    print("可用工具命令：")
+    for item in metadata:
+        if not item.command:
+            continue
+        safety = "只读" if item.read_only else "可写"
+        print(f"{item.command} - {item.description} [{item.source}, {safety}]")
+        print(f"  用法：{item.usage}")
+
+
+def _build_cli_tool_arguments(metadata: ToolMetadata, value: str) -> dict | None:
+    value = value.strip()
+    if metadata.name == "list_project_files":
+        return {}
+    if metadata.name == "read_project_file":
+        if not value:
+            return None
+        return {"path": value}
+    if metadata.name == "search_project_text":
+        if not value:
+            return None
+        return {"query": value}
+    return {} if not value else {"input": value}
