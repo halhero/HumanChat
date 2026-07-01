@@ -65,19 +65,19 @@ def search_project_text(root: Path, query: str, limit: int = 50) -> list[dict]:
     return matches
 
 
-@tool
+@tool("list_project_files")
 def list_project_files_tool() -> str:
     """List readable files inside the HumanChat project."""
     return "\n".join(list_project_files(PROJECT_ROOT, limit=100))
 
 
-@tool
+@tool("read_project_file")
 def read_project_file_tool(path: str) -> str:
     """Read a UTF-8 text file inside the HumanChat project."""
     return read_project_file(PROJECT_ROOT, path)
 
 
-@tool
+@tool("search_project_text")
 def search_project_text_tool(query: str) -> str:
     """Search for exact text inside UTF-8 files in the HumanChat project."""
     matches = search_project_text(PROJECT_ROOT, query, limit=50)

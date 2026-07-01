@@ -9,7 +9,7 @@ from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
 from human_chat.schemas import ChatState, TtsResponse
 from human_chat.storage import create_memory_store
-from human_chat.tools import get_project_tools
+from human_chat.tool_provider import create_tool_provider
 from human_chat.tts import TtsClient, TtsError
 
 
@@ -54,7 +54,8 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     character = load_character(settings.character_path)
     memory_store = create_memory_store(settings)
     llm = create_chat_model(settings)
-    project_tools = get_project_tools()
+    tool_provider = create_tool_provider(settings)
+    project_tools = tool_provider.get_tools()
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)
