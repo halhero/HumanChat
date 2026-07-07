@@ -1,9 +1,8 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
-
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from human_chat.config import Settings
 
@@ -21,7 +20,7 @@ def create_session() -> dict:
         "id": create_session_id(),
         "created_at": now,
         "updated_at": now,
-        "messages": [],
+        "message_count": 0,
     }
 
 
@@ -31,12 +30,17 @@ def session_path(settings: Settings, session_id: str) -> Path:
 
 def save_session(settings: Settings, session: dict) -> None:
     settings.session_dir.mkdir(parents=True, exist_ok=True)
-    session["updated_at"] = datetime.now(TIMEZONE).isoformat()
-    path = session_path(settings, session["id"])
+    session_to_save = dict(session)
+    messages = session_to_save.pop("messages", [])
+    session_to_save["message_count"] = session_to_save.get("message_count", len(messages))
+    session_to_save["updated_at"] = datetime.now(TIMEZONE).isoformat()
+    path = session_path(settings, session_to_save["id"])
     path.write_text(
-        json.dumps(session, ensure_ascii=False, indent=2),
+        json.dumps(session_to_save, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    session.clear()
+    session.update(session_to_save)
 
 
 def load_session(settings: Settings, session_id: str) -> dict:
@@ -61,7 +65,7 @@ def list_sessions(settings: Settings, limit: int = 10) -> list[dict]:
                 "id": session.get("id", path.stem),
                 "created_at": session.get("created_at", ""),
                 "updated_at": session.get("updated_at", ""),
-                "message_count": len(session.get("messages", [])),
+                "message_count": session.get("message_count", len(session.get("messages", []))),
             }
         )
 
@@ -69,7 +73,9 @@ def list_sessions(settings: Settings, limit: int = 10) -> list[dict]:
     return sessions[:limit]
 
 
-def messages_to_dicts(messages: list[BaseMessage]) -> list[dict]:
+def messages_to_dicts(messages: list[Any]) -> list[dict]:
+    from langchain_core.messages import AIMessage, HumanMessage
+
     items = []
 
     for message in messages:
@@ -90,8 +96,10 @@ def messages_to_dicts(messages: list[BaseMessage]) -> list[dict]:
     return items
 
 
-def dicts_to_messages(items: list[dict]) -> list[BaseMessage]:
-    messages: list[BaseMessage] = []
+def dicts_to_messages(items: list[dict]) -> list[Any]:
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    messages: list[Any] = []
 
     for item in items:
         role = item.get("role")

@@ -4,7 +4,7 @@ from human_chat.graph import build_graph
 from human_chat.llm import create_chat_model
 from human_chat.logging_config import get_logger
 from human_chat.memory_extractor import extract_memory_candidates
-from human_chat.session_store import dicts_to_messages, messages_to_dicts
+from human_chat.session_store import dicts_to_messages
 from human_chat.storage import create_session_store
 
 
@@ -42,7 +42,7 @@ class ChatRuntime:
         self.messages = result.get("messages", self.messages)
 
         if self.persist_session and "id" in self.session:
-            self.session["messages"] = messages_to_dicts(self.messages)
+            self.session["message_count"] = len(self.messages)
             self.session_store.save(self.session)
 
         result["memory_candidates"] = self._extract_memory_candidates(question, result)
