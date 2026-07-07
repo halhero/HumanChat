@@ -2,7 +2,7 @@ from human_chat.config import Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
 from human_chat.runtime import ChatRuntime
-from human_chat.storage import JsonSessionStore, create_memory_store, create_session_store
+from human_chat.storage import SessionStore, create_memory_store, create_session_store
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
 from human_chat.tts import start_tts_service, stop_tts_service
 
@@ -70,7 +70,7 @@ def _choose_input_provider(settings: Settings):
     return TextInputProvider()
 
 
-def _choose_session(session_store: JsonSessionStore) -> dict:
+def _choose_session(session_store: SessionStore) -> dict:
     recent_sessions = session_store.list_recent(limit=10)
 
     if not recent_sessions:
@@ -104,7 +104,7 @@ def _choose_session(session_store: JsonSessionStore) -> dict:
     return _create_new_session(session_store)
 
 
-def _create_new_session(session_store: JsonSessionStore) -> dict:
+def _create_new_session(session_store: SessionStore) -> dict:
     session = session_store.create()
     print(f"已创建新会话：{session['id']}")
     return session
@@ -215,7 +215,6 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         if not added:
             print("记忆为空或已存在，未添加。")
             return
-        save_memory(settings.memory_path, memory)
         print("长期记忆已添加。")
         return
 
@@ -233,7 +232,6 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         if deleted is None:
             print("未找到对应序号的长期记忆。")
             return
-        save_memory(settings.memory_path, memory)
         print(f"长期记忆已删除：{deleted}")
         return
 
