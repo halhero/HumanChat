@@ -11,6 +11,7 @@ class ChatState(BaseModel):
     tool_call_count: int = 0
     tool_events: list[dict[str, Any]] = Field(default_factory=list)
     tool_limit_reached: bool = False
+    memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     memory_prompt: str = ""
     assistant_text: str = ""
     tts_error: str = ""

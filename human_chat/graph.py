@@ -7,6 +7,7 @@ from human_chat.character import load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
+from human_chat.memory_extractor import extract_memory_candidates
 from human_chat.schemas import ChatState, TtsResponse
 from human_chat.storage import create_memory_store
 from human_chat.tool_provider import create_tool_provider
@@ -122,6 +123,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             "tool_call_count": 0,
             "tool_events": [],
             "tool_limit_reached": False,
+            "memory_candidates": [],
         }
 
     def call_agent_model(state: ChatState):
@@ -181,6 +183,18 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             return {"tts_error": str(exc)}
         return {"tts_error": ""}
 
+    def extract_memory(state: ChatState):
+        if not settings.memory_extraction_enabled or not state.assistant_text:
+            return {"memory_candidates": []}
+
+        try:
+            candidates = extract_memory_candidates(llm, state.question, state.assistant_text)
+        except Exception:
+            logger.exception("Failed to extract memory candidates")
+            return {"memory_candidates": []}
+
+        return {"memory_candidates": [_model_to_dict(candidate) for candidate in candidates]}
+
     def mark_tool_limit_reached(state: ChatState):
         return {
             "tool_limit_reached": True,
@@ -211,6 +225,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
     workflow.add_node("generate_reply", generate_reply)
+    workflow.add_node("extract_memory", extract_memory)
     workflow.add_node("synthesize_speech", synthesize_speech)
     workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
     workflow.add_edge(START, "prepare_context")
@@ -226,8 +241,15 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     )
     workflow.add_edge("execute_project_tools", "call_agent_model")
     workflow.add_edge("mark_tool_limit_reached", "generate_reply")
-    workflow.add_edge("generate_reply", "synthesize_speech")
+    workflow.add_edge("generate_reply", "extract_memory")
+    workflow.add_edge("extract_memory", "synthesize_speech")
     workflow.add_edge("synthesize_speech", END)
     if checkpointer is not None:
         return workflow.compile(checkpointer=checkpointer)
     return workflow.compile()
+
+
+def _model_to_dict(model) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
