@@ -1,5 +1,6 @@
 from human_chat.storage.base import MemoryStore, SessionStore
 from human_chat.storage.json_store import JsonMemoryStore, JsonSessionStore
+from human_chat.memory_repository import JsonMemoryRepository, MemoryRepository
 
 
 def create_session_store(settings) -> SessionStore:
@@ -12,8 +13,10 @@ def create_memory_store(settings) -> MemoryStore:
 
 __all__ = [
     "JsonMemoryStore",
+    "JsonMemoryRepository",
     "JsonSessionStore",
     "MemoryStore",
+    "MemoryRepository",
     "SessionStore",
     "create_memory_store",
     "create_session_store",

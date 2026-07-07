@@ -1,11 +1,10 @@
 from human_chat.config import Settings
+from human_chat.memory_repository import JsonMemoryRepository, default_memory_namespace
 from human_chat.memory_store import (
     LongTermMemory,
     add_memory_item,
     delete_memory_item,
     format_memory_for_prompt,
-    load_memory,
-    save_memory,
 )
 from human_chat.session_store import create_session, list_sessions, load_session, save_session
 
@@ -32,12 +31,14 @@ class JsonSessionStore:
 class JsonMemoryStore:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.namespace = default_memory_namespace(settings)
+        self.repository = JsonMemoryRepository(settings.memory_path, self.namespace)
 
     def load(self) -> LongTermMemory:
-        return load_memory(self.settings.memory_path)
+        return self.repository.load_memory(self.namespace)
 
     def save(self, memory: LongTermMemory) -> None:
-        save_memory(self.settings.memory_path, memory)
+        self.repository.save_memory(self.namespace, memory)
 
     def add(self, category: str, text: str) -> bool:
         memory = self.load()

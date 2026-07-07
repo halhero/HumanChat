@@ -37,6 +37,7 @@ class Settings(BaseModel):
     stt_model: str = "whisper-1"
     stt_base_url: str = ""
     memory_extraction_enabled: bool = True
+    memory_user_id: str = "default"
     mic_record_seconds: int = 5
     mic_sample_rate: int = 16000
 
@@ -72,6 +73,7 @@ def load_settings() -> Settings:
         stt_model=os.getenv("HUMANCHAT_STT_MODEL", "whisper-1"),
         stt_base_url=os.getenv("HUMANCHAT_STT_BASE_URL", ""),
         memory_extraction_enabled=_env_bool("HUMANCHAT_MEMORY_EXTRACTION_ENABLED", True),
+        memory_user_id=os.getenv("HUMANCHAT_MEMORY_USER_ID", "default"),
         mic_record_seconds=int(os.getenv("HUMANCHAT_MIC_RECORD_SECONDS", "5")),
         mic_sample_rate=int(os.getenv("HUMANCHAT_MIC_SAMPLE_RATE", "16000")),
         character_path=_env_path("HUMANCHAT_CHARACTER_PATH", PROJECT_ROOT / "characters" / "nanami.yaml"),
