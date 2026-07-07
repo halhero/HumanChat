@@ -1,25 +1,76 @@
 import json
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
 
+TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _now_iso() -> str:
+    return datetime.now(TIMEZONE).isoformat()
+
+
+class MemoryItem(BaseModel):
+    id: str = Field(default_factory=lambda: uuid4().hex)
+    category: str
+    text: str
+    created_at: str = Field(default_factory=_now_iso)
+    updated_at: str = Field(default_factory=_now_iso)
+    source: str = "manual"
+    confidence: float | None = None
+
+
 class LongTermMemory(BaseModel):
-    preferences: list[str] = Field(default_factory=list)
-    facts: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
+    items: list[MemoryItem] = Field(default_factory=list)
+
+    def __init__(self, **data):
+        legacy_items = []
+        for category in ("preferences", "facts", "notes"):
+            for text in data.pop(category, []) or []:
+                legacy_items.append(
+                    MemoryItem(
+                        category=category,
+                        text=text,
+                        source="legacy",
+                    )
+                )
+        if legacy_items:
+            data["items"] = [*data.get("items", []), *legacy_items]
+        super().__init__(**data)
+
+    @property
+    def preferences(self) -> list[str]:
+        return get_memory_items(self, "preferences")
+
+    @property
+    def facts(self) -> list[str]:
+        return get_memory_items(self, "facts")
+
+    @property
+    def notes(self) -> list[str]:
+        return get_memory_items(self, "notes")
 
 
 DEFAULT_MEMORY = LongTermMemory(
-    preferences=[
-        "用户偏好中文沟通和讲解。",
-        "用户希望在实际修改代码前，先看到设计说明和示例代码。",
-        "用户希望解释尽量适合新手理解。",
-    ],
-    facts=[
-        "用户正在开发 HumanChat 项目。",
-        "HumanChat 是一个聊天 Agent 项目。",
-        "HumanChat 当前使用 LangGraph、DashScope 兼容 OpenAI API 和 GPT-SoVITS。",
+    items=[
+        MemoryItem(category="preferences", text="用户偏好中文沟通和讲解。", source="default"),
+        MemoryItem(
+            category="preferences",
+            text="用户希望在实际修改代码前，先看到设计说明和示例代码。",
+            source="default",
+        ),
+        MemoryItem(category="preferences", text="用户希望解释尽量适合新手理解。", source="default"),
+        MemoryItem(category="facts", text="用户正在开发 HumanChat 项目。", source="default"),
+        MemoryItem(category="facts", text="HumanChat 是一个聊天 Agent 项目。", source="default"),
+        MemoryItem(
+            category="facts",
+            text="HumanChat 当前使用 LangGraph、DashScope 兼容 OpenAI API 和 GPT-SoVITS。",
+            source="default",
+        ),
     ],
 )
 
@@ -42,24 +93,33 @@ def save_memory(path: Path, memory: LongTermMemory) -> None:
 
 
 def add_memory_item(memory: LongTermMemory, category: str, text: str) -> bool:
-    items = _get_category_items(memory, category)
+    normalized_category = _normalize_category(category)
     normalized = text.strip()
+    items = get_memory_items(memory, normalized_category)
     if not normalized or normalized in items:
         return False
-    items.append(normalized)
+    memory.items.append(
+        MemoryItem(
+            category=normalized_category,
+            text=normalized,
+            source="manual",
+        )
+    )
     return True
 
 
 def delete_memory_item(memory: LongTermMemory, category: str, index: int) -> str | None:
-    items = _get_category_items(memory, category)
+    items = _get_category_memory_items(memory, category)
     zero_based_index = index - 1
     if zero_based_index < 0 or zero_based_index >= len(items):
         return None
-    return items.pop(zero_based_index)
+    item = items[zero_based_index]
+    memory.items = [existing for existing in memory.items if existing.id != item.id]
+    return item.text
 
 
 def get_memory_items(memory: LongTermMemory, category: str) -> list[str]:
-    return list(_get_category_items(memory, category))
+    return [item.text for item in _get_category_memory_items(memory, category)]
 
 
 def format_memory_for_prompt(memory: LongTermMemory) -> str:
@@ -89,15 +149,9 @@ def _memory_to_dict(memory: LongTermMemory) -> dict:
     return memory.dict()
 
 
-def _get_category_items(memory: LongTermMemory, category: str) -> list[str]:
+def _get_category_memory_items(memory: LongTermMemory, category: str) -> list[MemoryItem]:
     normalized = _normalize_category(category)
-    if normalized == "preferences":
-        return memory.preferences
-    if normalized == "facts":
-        return memory.facts
-    if normalized == "notes":
-        return memory.notes
-    raise ValueError(f"Unsupported memory category: {category}")
+    return [item for item in memory.items if item.category == normalized]
 
 
 def _normalize_category(category: str) -> str:
