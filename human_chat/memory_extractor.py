@@ -1,14 +1,6 @@
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
 
-
-class MemoryCandidate(BaseModel):
-    category: str = Field(description="One of: preference, fact, note.")
-    text: str = Field(description="A concise long-term memory candidate.")
-
-
-class MemoryExtractionResult(BaseModel):
-    candidates: list[MemoryCandidate] = Field(default_factory=list)
+from human_chat.memory_review import MemoryCandidate, MemoryExtractionResult
 
 
 MEMORY_EXTRACTION_PROMPT = """

@@ -1,6 +1,7 @@
 from human_chat.config import Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
+from human_chat.memory_review import create_memory_review_request
 from human_chat.runtime import ChatRuntime
 from human_chat.storage import SessionStore, create_memory_store, create_session_store
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
@@ -299,17 +300,16 @@ def _print_debug_summary(result: dict) -> None:
 
 
 def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> None:
-    if not candidates:
+    review_request = create_memory_review_request(candidates)
+    if not review_request.candidates:
         return
 
     memory_store = create_memory_store(settings)
 
     print("发现候选长期记忆：")
-    for index, candidate in enumerate(candidates, start=1):
-        category = candidate.get("category", "note")
-        text = candidate.get("text", "").strip()
-        if not text:
-            continue
+    for index, candidate in enumerate(review_request.candidates, start=1):
+        category = candidate.category
+        text = candidate.text
 
         print(f"{index}. {category}: {text}")
         choice = input("保存这条记忆？y/N：").strip().lower()
