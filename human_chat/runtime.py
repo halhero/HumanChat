@@ -19,7 +19,7 @@ class ChatRuntime:
         self.persist_session = persist_session
         self.session_store = session_store or create_session_store(settings)
         self.thread_id = self.session.get("id", "run_once")
-        self.checkpointer = checkpointer or create_checkpointer()
+        self.checkpointer = checkpointer or create_checkpointer(settings)
         self.app = build_graph(settings, checkpointer=self.checkpointer)
         self.graph_config = {"configurable": {"thread_id": self.thread_id}}
         self.messages = dicts_to_messages(self.session.get("messages", []))

@@ -44,6 +44,7 @@ class Settings(BaseModel):
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
     audio_temp_dir: Path = PROJECT_ROOT / "data" / "audio"
     memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
+    checkpoint_path: Path = PROJECT_ROOT / "data" / "checkpoints" / "langgraph.sqlite"
     speech_output_path: Path = PROJECT_ROOT / "speech" / "tmp.wav"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
 
@@ -79,6 +80,10 @@ def load_settings() -> Settings:
         character_path=_env_path("HUMANCHAT_CHARACTER_PATH", PROJECT_ROOT / "characters" / "nanami.yaml"),
         audio_temp_dir=_env_path("HUMANCHAT_AUDIO_TEMP_DIR", PROJECT_ROOT / "data" / "audio"),
         memory_path=_env_path("HUMANCHAT_MEMORY_PATH", PROJECT_ROOT / "data" / "memory" / "user_profile.json"),
+        checkpoint_path=_env_path(
+            "HUMANCHAT_CHECKPOINT_PATH",
+            PROJECT_ROOT / "data" / "checkpoints" / "langgraph.sqlite",
+        ),
         speech_output_path=_env_path("HUMANCHAT_SPEECH_OUTPUT_PATH", PROJECT_ROOT / "speech" / "tmp.wav"),
         session_dir=_env_path("HUMANCHAT_SESSION_DIR", PROJECT_ROOT / "data" / "sessions"),
         tts_service_url=os.getenv("HUMANCHAT_TTS_SERVICE_URL", "http://127.0.0.1:9880"),

@@ -132,6 +132,18 @@ When enabled, HumanChat also proposes long-term memory candidates after each nor
 HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
 ```
 
+## Short-Term Memory
+
+Short-term conversation state is managed by the LangGraph checkpointer with the active session id as `thread_id`.
+By default HumanChat uses:
+
+```env
+HUMANCHAT_CHECKPOINT_PATH="data/checkpoints/langgraph.sqlite"
+```
+
+When `langgraph-checkpoint-sqlite` is installed, this SQLite checkpoint file lets chat state survive process restarts.
+If the SQLite checkpointer package is unavailable, HumanChat falls back to an in-memory checkpointer and logs that the state is not restart-persistent.
+
 ## Project Tools
 
 HumanChat includes safe, read-only project tools exposed through the shared tool provider.

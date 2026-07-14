@@ -5,6 +5,7 @@ simpleaudio
 langchain-core
 langchain-openai
 langgraph
+langgraph-checkpoint-sqlite
 PyYAML
 openai
 sounddevice
