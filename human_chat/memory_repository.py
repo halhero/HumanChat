@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Protocol
 
 from human_chat.config import Settings
-from human_chat.memory_store import LongTermMemory, MemoryItem, load_memory, save_memory
+from human_chat.memory_store import LongTermMemory, MemoryItem, load_memory, memory_to_dict, save_memory
 
 
 MemoryNamespace = tuple[str, ...]
@@ -66,6 +66,38 @@ class JsonMemoryRepository:
             raise ValueError(f"JSON memory repository only supports namespace: {self.namespace}")
 
 
+class LangGraphMemoryRepository:
+    def __init__(self, store):
+        self.store = store
+
+    def load_memory(self, namespace: MemoryNamespace) -> LongTermMemory:
+        stored = self.store.get(namespace, "profile")
+        if stored is None:
+            return LongTermMemory()
+        return LongTermMemory(**_stored_value(stored))
+
+    def save_memory(self, namespace: MemoryNamespace, memory: LongTermMemory) -> None:
+        self.store.put(namespace, "profile", memory_to_dict(memory))
+
+    def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
+        return list(self.load_memory(namespace).items)
+
+    def put_item(self, namespace: MemoryNamespace, item: MemoryItem) -> None:
+        memory = self.load_memory(namespace)
+        memory.items = [existing for existing in memory.items if existing.id != item.id]
+        memory.items.append(item)
+        self.save_memory(namespace, memory)
+
+    def delete_item(self, namespace: MemoryNamespace, item_id: str) -> bool:
+        memory = self.load_memory(namespace)
+        original_count = len(memory.items)
+        memory.items = [item for item in memory.items if item.id != item_id]
+        deleted = len(memory.items) != original_count
+        if deleted:
+            self.save_memory(namespace, memory)
+        return deleted
+
+
 def memory_path_for_namespace(base_path: Path, namespace: MemoryNamespace) -> Path:
     if namespace == ("users", "default", "memory"):
         return base_path
@@ -81,3 +113,11 @@ def memory_path_for_namespace(base_path: Path, namespace: MemoryNamespace) -> Pa
 def _safe_path_segment(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip())
     return normalized.strip("._") or "default"
+
+
+def _stored_value(stored) -> dict:
+    if hasattr(stored, "value"):
+        return stored.value
+    if isinstance(stored, dict) and "value" in stored:
+        return stored["value"]
+    return stored

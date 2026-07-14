@@ -71,7 +71,7 @@ def load_memory(path: Path) -> LongTermMemory:
 def save_memory(path: Path, memory: LongTermMemory) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(_memory_to_dict(memory), ensure_ascii=False, indent=2),
+        json.dumps(memory_to_dict(memory), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -117,8 +117,11 @@ def format_memory_for_prompt(memory: LongTermMemory) -> str:
     return "\n".join(["长期记忆：", *[f"- {item}" for item in items]])
 
 
-def _memory_to_dict(memory: LongTermMemory) -> dict:
+def memory_to_dict(memory: LongTermMemory) -> dict:
     if hasattr(memory, "model_dump"):
         return memory.model_dump()
     return memory.dict()
 
+
+def _memory_to_dict(memory: LongTermMemory) -> dict:
+    return memory_to_dict(memory)
