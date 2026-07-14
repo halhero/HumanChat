@@ -40,16 +40,16 @@ class JsonMemoryStore:
     def save(self, memory: LongTermMemory) -> None:
         self.repository.save_memory(self.namespace, memory)
 
-    def add(self, category: str, text: str) -> bool:
+    def add(self, text: str, source: str = "manual", confidence: float | None = None) -> bool:
         memory = self.load()
-        added = add_memory_item(memory, category, text)
+        added = add_memory_item(memory, text, source=source, confidence=confidence)
         if added:
             self.save(memory)
         return added
 
-    def delete(self, category: str, index: int) -> str | None:
+    def delete(self, index: int) -> str | None:
         memory = self.load()
-        deleted = delete_memory_item(memory, category, index)
+        deleted = delete_memory_item(memory, index)
         if deleted is not None:
             self.save(memory)
         return deleted

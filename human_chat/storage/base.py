@@ -24,10 +24,10 @@ class MemoryStore(Protocol):
     def save(self, memory: LongTermMemory) -> None:
         ...
 
-    def add(self, category: str, text: str) -> bool:
+    def add(self, text: str, source: str = "manual", confidence: float | None = None) -> bool:
         ...
 
-    def delete(self, category: str, index: int) -> str | None:
+    def delete(self, index: int) -> str | None:
         ...
 
     def format_for_prompt(self) -> str:

@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 
 
 class MemoryCandidate(BaseModel):
-    category: str = Field(description="One of: preference, fact, note.")
     text: str = Field(description="A concise long-term memory candidate.")
 
 
@@ -21,7 +20,6 @@ def create_memory_review_request(candidates: list[dict | MemoryCandidate]) -> Me
     for candidate in candidates:
         parsed = candidate if isinstance(candidate, MemoryCandidate) else MemoryCandidate(**candidate)
         parsed.text = parsed.text.strip()
-        parsed.category = parsed.category.strip().lower() or "note"
         if parsed.text:
             parsed_candidates.append(parsed)
 

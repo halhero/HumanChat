@@ -105,7 +105,7 @@ HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
 
 ## Long-Term Memory
 
-Long-term memory stores stable user preferences and project facts across sessions.
+Long-term memory stores stable user and project information across sessions.
 The default memory path is:
 
 ```env
@@ -122,10 +122,8 @@ During chat, manage long-term memory with:
 
 ```text
 /memory
-/memory add preference 用户希望先看设计再改代码
-/memory add fact HumanChat 使用 LangGraph
-/memory add note 这是一条备注
-/memory delete preference 1
+/memory add 用户希望先看设计再改代码
+/memory delete 1
 ```
 
 When enabled, HumanChat also proposes long-term memory candidates after each normal chat turn and asks for confirmation before saving:

@@ -203,13 +203,12 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
     action = parts[1].lower()
 
     if action == "add":
-        if len(parts) < 4:
-            print("用法：/memory add preference|fact|note 内容")
+        if len(parts) < 3:
+            print("用法：/memory add 内容")
             return
-        category = parts[2]
-        text = parts[3]
+        text = parts[2] if len(parts) == 3 else parts[2] + " " + parts[3]
         try:
-            added = memory_store.add(category, text)
+            added = memory_store.add(text)
         except ValueError as exc:
             print(exc)
             return
@@ -220,13 +219,12 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
         return
 
     if action == "delete":
-        if len(parts) < 4:
-            print("用法：/memory delete preference|fact|note 序号")
+        if len(parts) < 3:
+            print("用法：/memory delete 序号")
             return
-        category = parts[2]
         try:
-            index = int(parts[3])
-            deleted = memory_store.delete(category, index)
+            index = int(parts[2])
+            deleted = memory_store.delete(index)
         except ValueError as exc:
             print(exc)
             return
@@ -308,16 +306,15 @@ def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> No
 
     print("发现候选长期记忆：")
     for index, candidate in enumerate(review_request.candidates, start=1):
-        category = candidate.category
         text = candidate.text
 
-        print(f"{index}. {category}: {text}")
+        print(f"{index}. {text}")
         choice = input("保存这条记忆？y/N：").strip().lower()
         if choice != "y":
             continue
 
         try:
-            added = memory_store.add(category, text)
+            added = memory_store.add(text, source="extracted_confirmed")
         except ValueError as exc:
             print(exc)
             continue
