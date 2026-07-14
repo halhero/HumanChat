@@ -110,10 +110,12 @@ The default memory path is:
 
 ```env
 HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
+HUMANCHAT_MEMORY_USER_ID="default"
 ```
 
 If the file does not exist, HumanChat creates it from the built-in default memory.
 Real memory files are ignored by Git; use `data/memory/user_profile.example.json` as a template.
+The default user keeps using `user_profile.json`. Other `HUMANCHAT_MEMORY_USER_ID` values are stored in separate JSON files derived from the same base path.
 
 Long-term memory is injected into the system prompt together with the selected character profile.
 The graph reads long-term memory on each chat turn, so `/memory add` and `/memory delete` can affect later replies without restarting the app.

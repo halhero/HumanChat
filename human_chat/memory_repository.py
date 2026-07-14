@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -31,7 +32,7 @@ class MemoryRepository(Protocol):
 
 class JsonMemoryRepository:
     def __init__(self, path: Path, namespace: MemoryNamespace):
-        self.path = path
+        self.path = memory_path_for_namespace(path, namespace)
         self.namespace = namespace
 
     def load_memory(self, namespace: MemoryNamespace) -> LongTermMemory:
@@ -63,3 +64,20 @@ class JsonMemoryRepository:
     def _validate_namespace(self, namespace: MemoryNamespace) -> None:
         if namespace != self.namespace:
             raise ValueError(f"JSON memory repository only supports namespace: {self.namespace}")
+
+
+def memory_path_for_namespace(base_path: Path, namespace: MemoryNamespace) -> Path:
+    if namespace == ("users", "default", "memory"):
+        return base_path
+
+    if len(namespace) >= 2 and namespace[0] == "users":
+        user_id = _safe_path_segment(namespace[1])
+        return base_path.with_name(f"{base_path.stem}.{user_id}{base_path.suffix}")
+
+    namespace_suffix = ".".join(_safe_path_segment(part) for part in namespace)
+    return base_path.with_name(f"{base_path.stem}.{namespace_suffix}{base_path.suffix}")
+
+
+def _safe_path_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip())
+    return normalized.strip("._") or "default"
