@@ -134,6 +134,8 @@ When enabled, HumanChat also proposes long-term memory candidates after each nor
 HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
 ```
 
+The graph raises a structured memory review interrupt, and the CLI resumes the graph with an explicit user decision before long-term memory is written.
+
 ## Short-Term Memory
 
 Short-term conversation state is managed by the LangGraph checkpointer with the active session id as `thread_id`.

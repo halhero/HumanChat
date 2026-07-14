@@ -1,7 +1,11 @@
 from human_chat.config import Settings, load_settings
 from human_chat.input_provider import AudioFileInputProvider, MicrophoneInputProvider, TextInputProvider
 from human_chat.logging_config import get_logger, setup_logging
-from human_chat.memory_review import create_memory_review_request
+from human_chat.memory_review import (
+    MemoryReviewDecision,
+    MemoryReviewRequest,
+    parse_memory_review_request,
+)
 from human_chat.runtime import ChatRuntime
 from human_chat.storage import SessionStore, create_memory_store, create_session_store
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
@@ -182,11 +186,16 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
         if answer:
             print(f"助手：{answer}")
 
-        _confirm_memory_candidates(runtime.settings, result.get("memory_candidates", []))
-
         tts_error = result.get("tts_error", "")
         if tts_error:
             print(f"语音生成失败：{tts_error}")
+
+        resume_result = _handle_graph_interrupts(runtime, result)
+        if resume_result is not None:
+            result = {**result, **resume_result}
+            saved_count = result.get("memory_saved_count", 0)
+            if saved_count:
+                print(f"已保存 {saved_count} 条长期记忆。")
 
         if debug_enabled:
             _print_debug_summary(result)
@@ -292,17 +301,44 @@ def _print_debug_summary(result: dict) -> None:
             f"round={event.get('round')} "
             f"status={event.get('status')}"
         )
-    print(f"[debug] memory_candidates={len(result.get('memory_candidates', []))}")
+    review_request = parse_memory_review_request(result.get("memory_review_request"))
+    print(f"[debug] memory_review_candidates={len(review_request.candidates)}")
     if result.get("tts_error"):
         print(f"[debug] tts_error={result['tts_error']}")
 
 
-def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> None:
-    review_request = create_memory_review_request(candidates)
-    if not review_request.candidates:
-        return
+def _handle_graph_interrupts(runtime: ChatRuntime, result: dict) -> dict | None:
+    resume_result = None
 
-    memory_store = create_memory_store(settings)
+    for payload in _extract_interrupt_payloads(result):
+        if not isinstance(payload, dict) or payload.get("type") != "memory_review":
+            print("收到暂不支持的 Graph interrupt，已跳过。")
+            continue
+
+        review_request = parse_memory_review_request(payload.get("request"))
+        decision = _prompt_memory_review_decision(review_request)
+        resume_result = runtime.resume(_model_to_dict(decision))
+
+    return resume_result
+
+
+def _extract_interrupt_payloads(result: dict) -> list:
+    interrupts = result.get("__interrupt__") or []
+    if not isinstance(interrupts, (list, tuple)):
+        interrupts = [interrupts]
+
+    payloads = []
+    for item in interrupts:
+        value = getattr(item, "value", None)
+        if value is None and isinstance(item, dict):
+            value = item.get("value", item)
+        if value is not None:
+            payloads.append(value)
+    return payloads
+
+
+def _prompt_memory_review_decision(review_request: MemoryReviewRequest) -> MemoryReviewDecision:
+    accepted_texts = []
 
     print("发现候选长期记忆：")
     for index, candidate in enumerate(review_request.candidates, start=1):
@@ -313,16 +349,15 @@ def _confirm_memory_candidates(settings: Settings, candidates: list[dict]) -> No
         if choice != "y":
             continue
 
-        try:
-            added = memory_store.add(text, source="extracted_confirmed")
-        except ValueError as exc:
-            print(exc)
-            continue
+        accepted_texts.append(text)
 
-        if added:
-            print("已加入长期记忆。")
-        else:
-            print("记忆为空或已存在，未添加。")
+    return MemoryReviewDecision(accepted_texts=accepted_texts)
+
+
+def _model_to_dict(model) -> dict:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
 
 
 def _is_tool_command(command: str) -> bool:

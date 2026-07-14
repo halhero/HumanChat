@@ -32,10 +32,20 @@ class ChatRuntime:
             self._seed_checkpoint = False
 
         result = self.app.invoke(graph_input, config=self.graph_config)
+        self._save_runtime_state(result)
+
+        return result
+
+    def resume(self, value: dict) -> dict:
+        from langgraph.types import Command
+
+        result = self.app.invoke(Command(resume=value), config=self.graph_config)
+        self._save_runtime_state(result)
+        return result
+
+    def _save_runtime_state(self, result: dict) -> None:
         self.messages = result.get("messages", self.messages)
 
         if self.persist_session and "id" in self.session:
             self.session["message_count"] = len(self.messages)
             self.session_store.save(self.session)
-
-        return result
