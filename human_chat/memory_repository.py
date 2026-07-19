@@ -1,9 +1,11 @@
+import json
 import re
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from human_chat.config import Settings
-from human_chat.memory_store import LongTermMemory, MemoryItem, load_memory, memory_to_dict, save_memory
+from human_chat.memory_models import LongTermMemory, MemoryItem, create_default_memory
 
 
 MemoryNamespace = tuple[str, ...]
@@ -37,11 +39,26 @@ class JsonMemoryRepository:
 
     def load_memory(self, namespace: MemoryNamespace) -> LongTermMemory:
         self._validate_namespace(namespace)
-        return load_memory(self.path)
+        if not self.path.exists():
+            memory = create_default_memory()
+            self.save_memory(namespace, memory)
+            return memory
+
+        data = json.loads(self.path.read_text(encoding="utf-8"))
+        return LongTermMemory(**data)
 
     def save_memory(self, namespace: MemoryNamespace, memory: LongTermMemory) -> None:
         self._validate_namespace(namespace)
-        save_memory(self.path, memory)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps(_memory_to_dict(memory), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary_path.replace(self.path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
         return list(self.load_memory(namespace).items)
@@ -77,7 +94,7 @@ class LangGraphMemoryRepository:
         return LongTermMemory(**_stored_value(stored))
 
     def save_memory(self, namespace: MemoryNamespace, memory: LongTermMemory) -> None:
-        self.store.put(namespace, "profile", memory_to_dict(memory))
+        self.store.put(namespace, "profile", _memory_to_dict(memory))
 
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
         return list(self.load_memory(namespace).items)
@@ -121,3 +138,9 @@ def _stored_value(stored) -> dict:
     if isinstance(stored, dict) and "value" in stored:
         return stored["value"]
     return stored
+
+
+def _memory_to_dict(memory: LongTermMemory) -> dict:
+    if hasattr(memory, "model_dump"):
+        return memory.model_dump()
+    return memory.dict()
