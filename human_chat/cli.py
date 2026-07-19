@@ -7,7 +7,7 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.runtime import ChatRuntime
-from human_chat.storage import SessionStore, create_memory_store, create_session_store
+from human_chat.storage import SessionStore, create_memory_service, create_session_store
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
 from human_chat.tts import start_tts_service, stop_tts_service
 
@@ -203,10 +203,10 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
 
 def _handle_memory_command(settings: Settings, command: str) -> None:
     parts = command.split(maxsplit=3)
-    memory_store = create_memory_store(settings)
+    memory_service = create_memory_service(settings)
 
     if len(parts) == 1:
-        print(memory_store.format_for_prompt())
+        print(memory_service.format_for_prompt())
         return
 
     action = parts[1].lower()
@@ -217,7 +217,7 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
             return
         text = parts[2] if len(parts) == 3 else parts[2] + " " + parts[3]
         try:
-            added = memory_store.add(text)
+            added = memory_service.add(text)
         except ValueError as exc:
             print(exc)
             return
@@ -233,7 +233,7 @@ def _handle_memory_command(settings: Settings, command: str) -> None:
             return
         try:
             index = int(parts[2])
-            deleted = memory_store.delete(index)
+            deleted = memory_service.delete(index)
         except ValueError as exc:
             print(exc)
             return

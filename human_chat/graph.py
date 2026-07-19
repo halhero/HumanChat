@@ -15,7 +15,7 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.schemas import ChatState, TtsResponse
-from human_chat.storage import create_memory_store
+from human_chat.storage import create_memory_service
 from human_chat.tool_provider import create_tool_provider
 from human_chat.tts import TtsClient, TtsError
 
@@ -114,7 +114,7 @@ def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dic
 def build_graph(settings: Settings | None = None, checkpointer=None):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
-    memory_store = create_memory_store(settings)
+    memory_service = create_memory_service(settings)
     llm = create_chat_model(settings)
     tool_provider = create_tool_provider(settings)
     project_tools = tool_provider.get_tools()
@@ -124,7 +124,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
 
     def prepare_context(state: ChatState):
         return {
-            "memory_prompt": memory_store.format_for_prompt(),
+            "memory_prompt": memory_service.format_for_prompt(),
             "tool_messages": [],
             "tool_call_count": 0,
             "tool_events": [],
@@ -220,7 +220,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
         saved_count = 0
 
         for text in decision.accepted_texts:
-            if memory_store.add(text, source="extracted_confirmed"):
+            if memory_service.add(text, source="extracted_confirmed"):
                 saved_count += 1
 
         return {"memory_saved_count": saved_count}

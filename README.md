@@ -16,12 +16,14 @@ HumanChat/
     input_provider.py     # Text and audio-file input providers
     logging_config.py     # Logging setup helpers
     llm.py                # Chat model factory
-    memory_store.py       # Long-term memory loading and formatting
+    memory_models.py      # Long-term memory data models
+    memory_repository.py  # JSON and LangGraph Store persistence adapters
+    memory_service.py     # Long-term memory business rules
     runtime.py            # Conversation runtime orchestration
     session_store.py      # JSON session persistence
     schemas.py            # Graph state and structured output schemas
     stt.py                # Speech-to-text helpers
-    storage/              # JSON-backed storage adapters
+    storage/              # Storage composition and session adapter
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
@@ -119,6 +121,17 @@ The default user keeps using `user_profile.json`. Other `HUMANCHAT_MEMORY_USER_I
 
 Long-term memory is injected into the system prompt together with the selected character profile.
 The graph reads long-term memory on each chat turn, so `/memory add` and `/memory delete` can affect later replies without restarting the app.
+
+The memory module follows a one-way dependency structure:
+
+```text
+Graph / CLI -> MemoryService -> MemoryRepository -> JSON or LangGraph Store
+                                      |
+                                  MemoryModel
+```
+
+`MemoryService` owns validation, deduplication, deletion, and prompt formatting.
+`MemoryRepository` owns persistence, while the model classes contain no file or business operations.
 
 During chat, manage long-term memory with:
 
