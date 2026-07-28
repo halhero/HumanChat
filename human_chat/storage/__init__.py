@@ -5,12 +5,12 @@ from human_chat.memory_repository import (
     default_memory_namespace,
 )
 from human_chat.memory_service import LongTermMemoryService, MemoryService
-from human_chat.storage.base import SessionStore
-from human_chat.storage.json_session_store import JsonSessionStore
+from human_chat.session_repository import SessionRepository
+from human_chat.storage.json_session_repository import JsonSessionRepository
 
 
-def create_session_store(settings) -> SessionStore:
-    return JsonSessionStore(settings)
+def create_session_repository(settings) -> SessionRepository:
+    return JsonSessionRepository(settings.session_dir)
 
 
 def create_memory_service(settings) -> MemoryService:
@@ -22,11 +22,11 @@ def create_memory_service(settings) -> MemoryService:
 __all__ = [
     "LangGraphMemoryRepository",
     "JsonMemoryRepository",
-    "JsonSessionStore",
+    "JsonSessionRepository",
     "LongTermMemoryService",
     "MemoryService",
     "MemoryRepository",
-    "SessionStore",
+    "SessionRepository",
     "create_memory_service",
-    "create_session_store",
+    "create_session_repository",
 ]

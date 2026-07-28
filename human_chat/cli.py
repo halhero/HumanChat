@@ -7,7 +7,9 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.runtime import ChatRuntime
-from human_chat.storage import SessionStore, create_memory_service, create_session_store
+from human_chat.session_models import SessionRecord
+from human_chat.session_repository import SessionRepository
+from human_chat.storage import create_memory_service, create_session_repository
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
 from human_chat.tts import start_tts_service, stop_tts_service
 
@@ -39,9 +41,13 @@ def chat_loop(settings: Settings | None = None) -> None:
     tts_process = _start_optional_tts(settings)
 
     try:
-        session_store = create_session_store(settings)
-        session = _choose_session(session_store)
-        runtime = ChatRuntime(settings, session, session_store=session_store)
+        session_repository = create_session_repository(settings)
+        session = _choose_session(session_repository)
+        runtime = ChatRuntime(
+            settings,
+            session,
+            session_repository=session_repository,
+        )
         input_provider = _choose_input_provider(settings)
         _run_chat_loop(runtime, input_provider)
     finally:
@@ -75,11 +81,11 @@ def _choose_input_provider(settings: Settings):
     return TextInputProvider()
 
 
-def _choose_session(session_store: SessionStore) -> dict:
-    recent_sessions = session_store.list_recent(limit=10)
+def _choose_session(session_repository: SessionRepository) -> SessionRecord:
+    recent_sessions = session_repository.list_recent(limit=10)
 
     if not recent_sessions:
-        return _create_new_session(session_store)
+        return _create_new_session(session_repository)
 
     print("请选择会话：")
     print("1. 新建会话")
@@ -89,8 +95,8 @@ def _choose_session(session_store: SessionStore) -> dict:
     choice = input("选择：").strip()
 
     if choice == "2":
-        session_id = recent_sessions[0]["id"]
-        session = session_store.load(session_id)
+        session_id = recent_sessions[0].id
+        session = session_repository.load(session_id)
         print(f"继续最近会话：{session_id}")
         return session
 
@@ -100,48 +106,48 @@ def _choose_session(session_store: SessionStore) -> dict:
         session_id = _resolve_session_id(selected, recent_sessions)
 
         if session_id:
-            session = session_store.load(session_id)
+            session = session_repository.load(session_id)
             print(f"继续会话：{session_id}")
             return session
 
         print("未找到该会话，将创建新会话。")
 
-    return _create_new_session(session_store)
+    return _create_new_session(session_repository)
 
 
-def _create_new_session(session_store: SessionStore) -> dict:
-    session = session_store.create()
-    print(f"已创建新会话：{session['id']}")
+def _create_new_session(session_repository: SessionRepository) -> SessionRecord:
+    session = session_repository.create()
+    print(f"已创建新会话：{session.id}")
     return session
 
 
-def _print_recent_sessions(sessions: list[dict]) -> None:
+def _print_recent_sessions(sessions: list[SessionRecord]) -> None:
     print("最近会话：")
 
     for index, session in enumerate(sessions, start=1):
         print(
-            f"{index}. {session['id']} "
-            f"updated={session['updated_at']} "
-            f"messages={session['message_count']}"
+            f"{index}. {session.id} "
+            f"updated={session.updated_at.isoformat()} "
+            f"messages={session.message_count}"
         )
 
 
-def _resolve_session_id(value: str, sessions: list[dict]) -> str | None:
+def _resolve_session_id(value: str, sessions: list[SessionRecord]) -> str | None:
     if value.isdigit():
         index = int(value) - 1
         if 0 <= index < len(sessions):
-            return sessions[index]["id"]
+            return sessions[index].id
 
     for session in sessions:
-        if session["id"] == value:
-            return session["id"]
+        if session.id == value:
+            return session.id
 
     return None
 
 
 def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
     debug_enabled = False
-    print(f"HumanChat 已启动，会话：{runtime.session['id']}")
+    print(f"HumanChat 已启动，会话：{runtime.session.id}")
     print("输入 exit / quit / q / 退出 可结束。")
 
     while True:

@@ -20,10 +20,11 @@ HumanChat/
     memory_repository.py  # JSON and LangGraph Store persistence adapters
     memory_service.py     # Long-term memory business rules
     runtime.py            # Conversation runtime orchestration
-    session_store.py      # JSON session persistence
+    session_models.py     # Typed session metadata
+    session_repository.py # Session persistence contract
     schemas.py            # Graph state and structured output schemas
     stt.py                # Speech-to-text helpers
-    storage/              # Storage composition and session adapter
+    storage/              # Storage composition and JSON repositories
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
