@@ -22,7 +22,7 @@ from human_chat.memory_repository import (
 )
 from human_chat.memory_service import LongTermMemoryService
 from human_chat.schemas import AgentContext, ChatState, TtsResponse
-from human_chat.tool_provider import create_tool_provider
+from human_chat.tool_provider import ToolRegistry, create_tool_registry
 from human_chat.tts import TtsClient, TtsError
 
 
@@ -122,6 +122,7 @@ def build_graph(
     checkpointer=None,
     store=None,
     memory_repository: MemoryRepository | None = None,
+    tool_registry: ToolRegistry | None = None,
 ):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
@@ -129,8 +130,8 @@ def build_graph(
         settings.memory_path
     )
     llm = create_chat_model(settings)
-    tool_provider = create_tool_provider(settings)
-    project_tools = tool_provider.get_tools()
+    active_tool_registry = tool_registry or create_tool_registry()
+    project_tools = active_tool_registry.get_tools()
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)

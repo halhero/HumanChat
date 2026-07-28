@@ -10,7 +10,7 @@ from human_chat.runtime import ChatRuntime, open_chat_runtime
 from human_chat.session_models import SessionRecord
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
-from human_chat.tool_provider import ToolMetadata, create_tool_provider
+from human_chat.tool_provider import ToolMetadata, ToolRegistry
 from human_chat.tts import start_tts_service, stop_tts_service
 
 
@@ -183,8 +183,8 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             debug_enabled = _handle_debug_command(question, debug_enabled)
             continue
 
-        if _is_tool_command(question):
-            _handle_tool_command(runtime.settings, question)
+        if _is_tool_command(question, runtime.tool_registry):
+            _handle_tool_command(runtime.tool_registry, question)
             continue
 
         try:
@@ -375,20 +375,25 @@ def _model_to_dict(model) -> dict:
     return model.dict()
 
 
-def _is_tool_command(command: str) -> bool:
-    return command.split(maxsplit=1)[0] in TOOL_COMMANDS
+def _is_tool_command(command: str, registry: ToolRegistry | None) -> bool:
+    action = command.split(maxsplit=1)[0]
+    if action == "/tools":
+        return True
+    return registry is not None and registry.get_registration_by_command(action) is not None
 
 
-def _handle_tool_command(settings: Settings, command: str) -> None:
-    tool_provider = create_tool_provider(settings)
+def _handle_tool_command(registry: ToolRegistry | None, command: str) -> None:
+    if registry is None:
+        print("工具 Registry 不可用。")
+        return
     parts = command.split(maxsplit=1)
     action = parts[0]
 
     if action == "/tools":
-        _print_tool_commands(tool_provider.describe_tools())
+        _print_tool_commands(registry.describe_tools())
         return
 
-    metadata = tool_provider.get_metadata_by_command(action)
+    metadata = registry.get_metadata_by_command(action)
     if metadata is None:
         print("未知工具命令。输入 /tools 查看可用工具。")
         return
@@ -399,7 +404,7 @@ def _handle_tool_command(settings: Settings, command: str) -> None:
         return
 
     try:
-        print(tool_provider.invoke_tool(metadata.name, arguments))
+        print(registry.invoke_tool(metadata.name, arguments))
     except Exception as exc:
         logger.exception("CLI tool command failed")
         print(f"工具执行失败：{exc}")

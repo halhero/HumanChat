@@ -11,6 +11,7 @@ from human_chat.schemas import AgentContext
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
+from human_chat.tool_provider import ToolRegistry, create_tool_registry
 
 
 logger = get_logger(__name__)
@@ -27,6 +28,7 @@ class ChatRuntime:
         checkpoint_backend: str = "memory",
         checkpoint_persistent: bool = False,
         memory_service: MemoryService | None = None,
+        tool_registry: ToolRegistry | None = None,
     ):
         self.settings = settings
         self.session = session
@@ -36,6 +38,7 @@ class ChatRuntime:
         self.checkpoint_backend = checkpoint_backend
         self.checkpoint_persistent = checkpoint_persistent
         self.memory_service = memory_service
+        self.tool_registry = tool_registry
         self.thread_id = session.thread_id
         self.graph_config = {"configurable": {"thread_id": self.thread_id}}
         self.graph_context = AgentContext(user_id=settings.memory_user_id)
@@ -94,13 +97,19 @@ def open_chat_runtime(
 
     with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
         with open_memory_resource(settings) as memory:
+            tool_registry = create_tool_registry()
             active_session = _synchronize_session_recovery(
                 active_session,
                 checkpoint,
                 repository,
                 persist_session,
             )
-            app = _build_runtime_graph(settings, checkpoint, memory)
+            app = _build_runtime_graph(
+                settings,
+                checkpoint,
+                memory,
+                tool_registry,
+            )
             yield ChatRuntime(
                 settings=settings,
                 session=active_session,
@@ -110,6 +119,7 @@ def open_chat_runtime(
                 checkpoint_backend=checkpoint.backend,
                 checkpoint_persistent=checkpoint.persistent,
                 memory_service=memory.service,
+                tool_registry=tool_registry,
             )
 
 
@@ -117,12 +127,14 @@ def _build_runtime_graph(
     settings: Settings,
     checkpoint: CheckpointerResource,
     memory: MemoryResource,
+    tool_registry: ToolRegistry,
 ):
     return build_graph(
         settings,
         checkpointer=checkpoint.saver,
         store=memory.store,
         memory_repository=memory.repository,
+        tool_registry=tool_registry,
     )
 
 

@@ -26,6 +26,7 @@ HumanChat/
     schemas.py            # Graph state and structured output schemas
     stt.py                # Speech-to-text helpers
     storage/              # Storage composition and JSON repositories
+    tool_provider.py      # Provider loading and shared ToolRegistry
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
@@ -197,6 +198,7 @@ The agent graph and the CLI commands use the same tool source:
 These tools are limited to files inside the project directory.
 The agent graph can decide to call these read-only tools before generating a reply when a question requires project context.
 In chat, `/tools` shows the currently registered tool metadata, including source, safety level, and usage.
+Providers load `RegisteredTool` entries once at runtime; a shared `ToolRegistry` validates names and commands, then serves the same LangChain tools to both the Graph and CLI.
 
 ## Run
 

@@ -1,8 +1,35 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from human_chat.config import Settings
 from human_chat.tools import get_project_tools
+
+
+@dataclass(frozen=True)
+class ToolPolicy:
+    read_only: bool = True
+    requires_confirmation: bool = False
+
+
+@dataclass(frozen=True)
+class CliCommandSpec:
+    command: str
+    usage: str
+
+
+@dataclass(frozen=True)
+class RegisteredTool:
+    tool: Any
+    source: str
+    policy: ToolPolicy = ToolPolicy()
+    cli: CliCommandSpec | None = None
+
+    @property
+    def name(self) -> str:
+        return self.tool.name
+
+    @property
+    def description(self) -> str:
+        return self.tool.description
 
 
 @dataclass(frozen=True)
@@ -15,116 +42,125 @@ class ToolMetadata:
     read_only: bool = True
     requires_confirmation: bool = False
 
+    @classmethod
+    def from_registration(cls, registration: RegisteredTool) -> "ToolMetadata":
+        command = registration.cli.command if registration.cli else ""
+        usage = registration.cli.usage if registration.cli else ""
+        return cls(
+            name=registration.name,
+            description=registration.description,
+            source=registration.source,
+            command=command,
+            usage=usage,
+            read_only=registration.policy.read_only,
+            requires_confirmation=registration.policy.requires_confirmation,
+        )
+
 
 class ToolProvider(Protocol):
-    def get_tools(self) -> list[Any]:
-        """Return LangChain-compatible tools available to the agent."""
-
-    def describe_tools(self) -> list[ToolMetadata]:
-        """Return governance metadata for available tools."""
-
-    def get_tool(self, name: str) -> Any:
-        """Return one LangChain-compatible tool by name."""
-
-    def get_metadata_by_command(self, command: str) -> ToolMetadata | None:
-        """Return tool metadata for a CLI command."""
-
-    def invoke_tool(self, name: str, arguments: dict | None = None) -> Any:
-        """Invoke one tool through the unified provider."""
+    def load_tools(self) -> list[RegisteredTool]:
+        """Load tool registrations supplied by this provider."""
 
 
 class LocalProjectToolProvider:
     source = "local_project"
 
-    def get_tools(self) -> list[Any]:
-        return get_project_tools()
+    def load_tools(self) -> list[RegisteredTool]:
+        tools = {tool.name: tool for tool in get_project_tools()}
+        return [
+            RegisteredTool(
+                tool=tools["list_project_files"],
+                source=self.source,
+                cli=CliCommandSpec(command="/files", usage="/files"),
+            ),
+            RegisteredTool(
+                tool=tools["read_project_file"],
+                source=self.source,
+                cli=CliCommandSpec(
+                    command="/read",
+                    usage="/read human_chat/graph.py",
+                ),
+            ),
+            RegisteredTool(
+                tool=tools["search_project_text"],
+                source=self.source,
+                cli=CliCommandSpec(command="/search", usage="/search memory"),
+            ),
+        ]
 
-    def get_tool(self, name: str) -> Any:
-        tools = {tool.name: tool for tool in self.get_tools()}
-        return tools[name]
+
+class ToolRegistry:
+    def __init__(self, registrations: list[RegisteredTool]):
+        self._registrations = list(registrations)
+        self._by_name = self._index_by_name(self._registrations)
+        self._by_command = self._index_by_command(self._registrations)
+
+    @classmethod
+    def from_providers(cls, providers: list[ToolProvider]) -> "ToolRegistry":
+        registrations = []
+        for provider in providers:
+            registrations.extend(provider.load_tools())
+        return cls(registrations)
+
+    def get_tools(self) -> list[Any]:
+        return [registration.tool for registration in self._registrations]
 
     def describe_tools(self) -> list[ToolMetadata]:
         return [
-            ToolMetadata(
-                name="list_project_files",
-                description="List readable files inside the HumanChat project.",
-                source=self.source,
-                command="/files",
-                usage="/files",
-            ),
-            ToolMetadata(
-                name="read_project_file",
-                description="Read a UTF-8 text file inside the HumanChat project.",
-                source=self.source,
-                command="/read",
-                usage="/read human_chat/graph.py",
-            ),
-            ToolMetadata(
-                name="search_project_text",
-                description="Search for exact text inside UTF-8 files in the HumanChat project.",
-                source=self.source,
-                command="/search",
-                usage="/search memory",
-            ),
+            ToolMetadata.from_registration(registration)
+            for registration in self._registrations
         ]
-
-    def get_metadata_by_command(self, command: str) -> ToolMetadata | None:
-        metadata = {item.command: item for item in self.describe_tools()}
-        return metadata.get(command)
-
-    def invoke_tool(self, name: str, arguments: dict | None = None) -> Any:
-        return self.get_tool(name).invoke(arguments or {})
-
-
-class CompositeToolProvider:
-    def __init__(self, providers: list[ToolProvider]):
-        self.providers = providers
-        self._validate_unique_tool_names()
-
-    def get_tools(self) -> list[Any]:
-        tools = []
-        for provider in self.providers:
-            tools.extend(provider.get_tools())
-        return tools
-
-    def describe_tools(self) -> list[ToolMetadata]:
-        metadata = []
-        for provider in self.providers:
-            metadata.extend(provider.describe_tools())
-        return metadata
 
     def get_tool(self, name: str) -> Any:
-        for provider in self.providers:
-            try:
-                return provider.get_tool(name)
-            except KeyError:
-                continue
-        raise KeyError(f"未知工具：{name}")
+        try:
+            return self._by_name[name].tool
+        except KeyError as exc:
+            raise KeyError(f"未知工具：{name}") from exc
+
+    def get_registration_by_command(
+        self,
+        command: str,
+    ) -> RegisteredTool | None:
+        return self._by_command.get(command)
 
     def get_metadata_by_command(self, command: str) -> ToolMetadata | None:
-        for provider in self.providers:
-            metadata = provider.get_metadata_by_command(command)
-            if metadata is not None:
-                return metadata
-        return None
+        registration = self.get_registration_by_command(command)
+        if registration is None:
+            return None
+        return ToolMetadata.from_registration(registration)
 
     def invoke_tool(self, name: str, arguments: dict | None = None) -> Any:
         return self.get_tool(name).invoke(arguments or {})
 
-    def _validate_unique_tool_names(self) -> None:
-        names = [item.name for provider in self.providers for item in provider.describe_tools()]
-        if len(names) != len(set(names)):
-            raise ValueError("工具名称不能重复。")
-        commands = [
-            item.command
-            for provider in self.providers
-            for item in provider.describe_tools()
-            if item.command
-        ]
-        if len(commands) != len(set(commands)):
-            raise ValueError("工具命令不能重复。")
+    @staticmethod
+    def _index_by_name(
+        registrations: list[RegisteredTool],
+    ) -> dict[str, RegisteredTool]:
+        indexed = {}
+        for registration in registrations:
+            if registration.name in indexed:
+                raise ValueError(f"工具名称不能重复：{registration.name}")
+            indexed[registration.name] = registration
+        return indexed
+
+    @staticmethod
+    def _index_by_command(
+        registrations: list[RegisteredTool],
+    ) -> dict[str, RegisteredTool]:
+        indexed = {}
+        for registration in registrations:
+            if registration.cli is None:
+                continue
+            command = registration.cli.command
+            if command in indexed:
+                raise ValueError(f"工具命令不能重复：{command}")
+            indexed[command] = registration
+        return indexed
 
 
-def create_tool_provider(settings: Settings | None = None) -> ToolProvider:
-    _ = settings
-    return CompositeToolProvider([LocalProjectToolProvider()])
+def create_tool_registry(
+    providers: list[ToolProvider] | None = None,
+) -> ToolRegistry:
+    return ToolRegistry.from_providers(
+        providers or [LocalProjectToolProvider()]
+    )
