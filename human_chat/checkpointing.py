@@ -1,4 +1,7 @@
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Iterator
 
 from human_chat.config import Settings
 from human_chat.logging_config import get_logger
@@ -7,34 +10,65 @@ from human_chat.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def create_checkpointer(settings: Settings | None = None):
-    if settings is not None:
-        sqlite_checkpointer = _create_sqlite_checkpointer(settings.checkpoint_path)
-        if sqlite_checkpointer is not None:
-            return sqlite_checkpointer
+@dataclass(frozen=True)
+class CheckpointerResource:
+    saver: Any
+    backend: str
+    persistent: bool
 
-    logger.warning("Using in-memory LangGraph checkpointer; chat state will not survive process restart.")
-    return _create_memory_checkpointer()
+    def has_thread(self, thread_id: str) -> bool:
+        config = {"configurable": {"thread_id": thread_id}}
+        return self.saver.get_tuple(config) is not None
 
 
-def _create_sqlite_checkpointer(path: Path):
-    try:
-        import sqlite3
-        from langgraph.checkpoint.sqlite import SqliteSaver
-    except ImportError:
-        logger.warning(
-            "langgraph-checkpoint-sqlite is not installed; falling back to in-memory checkpointer."
+@contextmanager
+def open_checkpointer(
+    settings: Settings,
+    backend: str | None = None,
+) -> Iterator[CheckpointerResource]:
+    selected_backend = (backend or settings.checkpoint_backend).strip().lower()
+
+    if selected_backend == "memory":
+        yield CheckpointerResource(
+            saver=_create_memory_checkpointer(),
+            backend="memory",
+            persistent=False,
         )
-        return None
+        return
 
+    if selected_backend != "sqlite":
+        raise ValueError(f"不支持的 Checkpointer 后端：{selected_backend}")
+
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+    except ImportError as exc:
+        if settings.checkpoint_allow_memory_fallback:
+            logger.warning(
+                "SQLite checkpointer is unavailable; using explicitly allowed in-memory fallback."
+            )
+            yield CheckpointerResource(
+                saver=_create_memory_checkpointer(),
+                backend="memory",
+                persistent=False,
+            )
+            return
+        raise RuntimeError(
+            "langgraph-checkpoint-sqlite 未安装，且未允许内存 Checkpointer 降级。"
+        ) from exc
+
+    path = _prepare_sqlite_path(settings.checkpoint_path)
+    with SqliteSaver.from_conn_string(str(path)) as saver:
+        logger.info("Using managed SQLite LangGraph checkpointer: %s", path)
+        yield CheckpointerResource(
+            saver=saver,
+            backend="sqlite",
+            persistent=True,
+        )
+
+
+def _prepare_sqlite_path(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(path), check_same_thread=False)
-    checkpointer = SqliteSaver(connection)
-    setup = getattr(checkpointer, "setup", None)
-    if callable(setup):
-        setup()
-    logger.info("Using SQLite LangGraph checkpointer: %s", path)
-    return checkpointer
+    return path
 
 
 def _create_memory_checkpointer():

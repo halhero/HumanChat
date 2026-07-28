@@ -6,7 +6,7 @@ from human_chat.memory_review import (
     MemoryReviewRequest,
     parse_memory_review_request,
 )
-from human_chat.runtime import ChatRuntime
+from human_chat.runtime import ChatRuntime, open_chat_runtime
 from human_chat.session_models import SessionRecord
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_memory_service, create_session_repository
@@ -28,8 +28,12 @@ def run_once(question: str, settings: Settings | None = None):
     tts_process = _start_optional_tts(settings)
 
     try:
-        runtime = ChatRuntime(settings, persist_session=False)
-        return runtime.ask(question)
+        with open_chat_runtime(
+            settings,
+            persist_session=False,
+            checkpoint_backend="memory",
+        ) as runtime:
+            return runtime.ask(question)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)
@@ -43,13 +47,15 @@ def chat_loop(settings: Settings | None = None) -> None:
     try:
         session_repository = create_session_repository(settings)
         session = _choose_session(session_repository)
-        runtime = ChatRuntime(
+        with open_chat_runtime(
             settings,
             session,
             session_repository=session_repository,
-        )
-        input_provider = _choose_input_provider(settings)
-        _run_chat_loop(runtime, input_provider)
+        ) as runtime:
+            if session.message_count > 0 and not runtime.session.recoverable:
+                print("该会话缺少可恢复的 Checkpoint，将从空上下文继续。")
+            input_provider = _choose_input_provider(settings)
+            _run_chat_loop(runtime, input_provider)
     finally:
         if tts_process is not None:
             stop_tts_service(tts_process)

@@ -12,6 +12,7 @@ HumanChat/
   human_chat/
     character.py          # Character profile loading and validation
     audio_recorder.py     # Microphone recording helper
+    checkpointing.py      # Managed LangGraph checkpointer resources
     config.py             # Environment-based settings
     input_provider.py     # Text and audio-file input providers
     logging_config.py     # Logging setup helpers
@@ -156,11 +157,14 @@ Short-term conversation state is managed by the LangGraph checkpointer with the 
 By default HumanChat uses:
 
 ```env
+HUMANCHAT_CHECKPOINT_BACKEND="sqlite"
+HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK="false"
 HUMANCHAT_CHECKPOINT_PATH="data/checkpoints/langgraph.sqlite"
 ```
 
 When `langgraph-checkpoint-sqlite` is installed, this SQLite checkpoint file lets chat state survive process restarts.
-If the SQLite checkpointer package is unavailable, HumanChat falls back to an in-memory checkpointer and logs that the state is not restart-persistent.
+If the SQLite package is unavailable, HumanChat fails explicitly by default. Set `HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK="true"` only when a non-persistent development fallback is acceptable.
+Checkpointer connections are owned by the runtime context and are closed when the chat exits.
 
 ## Project Tools
 
