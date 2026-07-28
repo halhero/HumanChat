@@ -1,7 +1,13 @@
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
+
+
+@dataclass(frozen=True)
+class AgentContext:
+    user_id: str
 
 
 class ChatState(BaseModel):

@@ -38,6 +38,8 @@ class Settings(BaseModel):
     stt_base_url: str = ""
     memory_extraction_enabled: bool = True
     memory_user_id: str = "default"
+    memory_backend: str = "json"
+    memory_postgres_uri: str = ""
     checkpoint_backend: str = "sqlite"
     checkpoint_allow_memory_fallback: bool = False
     mic_record_seconds: int = 5
@@ -77,6 +79,8 @@ def load_settings() -> Settings:
         stt_base_url=os.getenv("HUMANCHAT_STT_BASE_URL", ""),
         memory_extraction_enabled=_env_bool("HUMANCHAT_MEMORY_EXTRACTION_ENABLED", True),
         memory_user_id=os.getenv("HUMANCHAT_MEMORY_USER_ID", "default"),
+        memory_backend=os.getenv("HUMANCHAT_MEMORY_BACKEND", "json"),
+        memory_postgres_uri=os.getenv("HUMANCHAT_MEMORY_POSTGRES_URI", ""),
         checkpoint_backend=os.getenv("HUMANCHAT_CHECKPOINT_BACKEND", "sqlite"),
         checkpoint_allow_memory_fallback=_env_bool(
             "HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK",

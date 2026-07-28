@@ -5,6 +5,9 @@ from human_chat.checkpointing import CheckpointerResource, open_checkpointer
 from human_chat.config import Settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
+from human_chat.memory_resources import MemoryResource, open_memory_resource
+from human_chat.memory_service import MemoryService
+from human_chat.schemas import AgentContext
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -23,6 +26,7 @@ class ChatRuntime:
         session_repository: SessionRepository | None = None,
         checkpoint_backend: str = "memory",
         checkpoint_persistent: bool = False,
+        memory_service: MemoryService | None = None,
     ):
         self.settings = settings
         self.session = session
@@ -31,8 +35,10 @@ class ChatRuntime:
         self.session_repository = session_repository
         self.checkpoint_backend = checkpoint_backend
         self.checkpoint_persistent = checkpoint_persistent
+        self.memory_service = memory_service
         self.thread_id = session.thread_id
         self.graph_config = {"configurable": {"thread_id": self.thread_id}}
+        self.graph_context = AgentContext(user_id=settings.memory_user_id)
         self.messages = []
 
         if self.persist_session and self.session_repository is None:
@@ -42,6 +48,7 @@ class ChatRuntime:
         result = self.app.invoke(
             {"question": question},
             config=self.graph_config,
+            context=self.graph_context,
         )
         self._save_runtime_state(result)
         return result
@@ -49,7 +56,11 @@ class ChatRuntime:
     def resume(self, value: dict) -> dict:
         from langgraph.types import Command
 
-        result = self.app.invoke(Command(resume=value), config=self.graph_config)
+        result = self.app.invoke(
+            Command(resume=value),
+            config=self.graph_config,
+            context=self.graph_context,
+        )
         self._save_runtime_state(result)
         return result
 
@@ -82,22 +93,37 @@ def open_chat_runtime(
         repository = create_session_repository(settings)
 
     with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
-        active_session = _synchronize_session_recovery(
-            active_session,
-            checkpoint,
-            repository,
-            persist_session,
-        )
-        app = build_graph(settings, checkpointer=checkpoint.saver)
-        yield ChatRuntime(
-            settings=settings,
-            session=active_session,
-            app=app,
-            persist_session=persist_session,
-            session_repository=repository,
-            checkpoint_backend=checkpoint.backend,
-            checkpoint_persistent=checkpoint.persistent,
-        )
+        with open_memory_resource(settings) as memory:
+            active_session = _synchronize_session_recovery(
+                active_session,
+                checkpoint,
+                repository,
+                persist_session,
+            )
+            app = _build_runtime_graph(settings, checkpoint, memory)
+            yield ChatRuntime(
+                settings=settings,
+                session=active_session,
+                app=app,
+                persist_session=persist_session,
+                session_repository=repository,
+                checkpoint_backend=checkpoint.backend,
+                checkpoint_persistent=checkpoint.persistent,
+                memory_service=memory.service,
+            )
+
+
+def _build_runtime_graph(
+    settings: Settings,
+    checkpoint: CheckpointerResource,
+    memory: MemoryResource,
+):
+    return build_graph(
+        settings,
+        checkpointer=checkpoint.saver,
+        store=memory.store,
+        memory_repository=memory.repository,
+    )
 
 
 def _synchronize_session_recovery(

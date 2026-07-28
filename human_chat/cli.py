@@ -9,7 +9,7 @@ from human_chat.memory_review import (
 from human_chat.runtime import ChatRuntime, open_chat_runtime
 from human_chat.session_models import SessionRecord
 from human_chat.session_repository import SessionRepository
-from human_chat.storage import create_memory_service, create_session_repository
+from human_chat.storage import create_session_repository
 from human_chat.tool_provider import ToolMetadata, create_tool_provider
 from human_chat.tts import start_tts_service, stop_tts_service
 
@@ -172,7 +172,7 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             break
 
         if question.startswith(MEMORY_COMMAND):
-            _handle_memory_command(runtime.settings, question)
+            _handle_memory_command(runtime, question)
             continue
 
         if question.startswith(INPUT_COMMAND):
@@ -213,9 +213,12 @@ def _run_chat_loop(runtime: ChatRuntime, input_provider) -> None:
             _print_debug_summary(result)
 
 
-def _handle_memory_command(settings: Settings, command: str) -> None:
+def _handle_memory_command(runtime: ChatRuntime, command: str) -> None:
     parts = command.split(maxsplit=3)
-    memory_service = create_memory_service(settings)
+    memory_service = runtime.memory_service
+    if memory_service is None:
+        print("长期记忆服务不可用。")
+        return
 
     if len(parts) == 1:
         print(memory_service.format_for_prompt())

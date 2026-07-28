@@ -115,6 +115,7 @@ The default memory path is:
 ```env
 HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
 HUMANCHAT_MEMORY_USER_ID="default"
+HUMANCHAT_MEMORY_BACKEND="json"
 ```
 
 If the file does not exist, HumanChat creates it from the built-in default memory.
@@ -135,6 +136,20 @@ Graph / CLI -> MemoryService -> MemoryRepository -> JSON or LangGraph Store
 `MemoryService` owns validation, deduplication, deletion, and prompt formatting.
 `MemoryRepository` owns persistence, while the model classes contain no file or business operations.
 Repository operations are item-based: each `MemoryItem.id` is the stable persistence key, including when a LangGraph Store adapter is used.
+
+Available memory backends are `json` for local persistence, `memory` for LangGraph Store development/testing, and `postgres` for a persistent LangGraph PostgresStore. Postgres mode also requires:
+
+```env
+HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
+```
+
+To migrate the active user's existing JSON memories after configuring Postgres explicitly, run:
+
+```powershell
+python -m human_chat.memory_migration
+```
+
+Migration is idempotent and never runs automatically during application startup.
 
 During chat, manage long-term memory with:
 

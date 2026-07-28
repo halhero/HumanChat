@@ -2,6 +2,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
+from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from human_chat.character import load_character
@@ -14,8 +15,13 @@ from human_chat.memory_review import (
     parse_memory_review_decision,
     parse_memory_review_request,
 )
-from human_chat.schemas import ChatState, TtsResponse
-from human_chat.storage import create_memory_service
+from human_chat.memory_repository import (
+    JsonMemoryRepository,
+    LangGraphMemoryRepository,
+    MemoryRepository,
+)
+from human_chat.memory_service import LongTermMemoryService
+from human_chat.schemas import AgentContext, ChatState, TtsResponse
 from human_chat.tool_provider import create_tool_provider
 from human_chat.tts import TtsClient, TtsError
 
@@ -111,10 +117,17 @@ def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dic
     return events
 
 
-def build_graph(settings: Settings | None = None, checkpointer=None):
+def build_graph(
+    settings: Settings | None = None,
+    checkpointer=None,
+    store=None,
+    memory_repository: MemoryRepository | None = None,
+):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
-    memory_service = create_memory_service(settings)
+    fallback_memory_repository = memory_repository or JsonMemoryRepository(
+        settings.memory_path
+    )
     llm = create_chat_model(settings)
     tool_provider = create_tool_provider(settings)
     project_tools = tool_provider.get_tools()
@@ -122,9 +135,16 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)
 
-    def prepare_context(state: ChatState):
+    def memory_service(runtime: Runtime[AgentContext]):
+        repository = fallback_memory_repository
+        if runtime.store is not None:
+            repository = LangGraphMemoryRepository(runtime.store)
+        namespace = ("users", runtime.context.user_id, "memory")
+        return LongTermMemoryService(repository, namespace)
+
+    def prepare_context(state: ChatState, runtime: Runtime[AgentContext]):
         return {
-            "memory_prompt": memory_service.format_for_prompt(),
+            "memory_prompt": memory_service(runtime).format_for_prompt(),
             "tool_messages": [],
             "tool_call_count": 0,
             "tool_events": [],
@@ -205,7 +225,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             return {"memory_review_request": None}
         return {"memory_review_request": _model_to_dict(review_request)}
 
-    def review_memory(state: ChatState):
+    def review_memory(state: ChatState, runtime: Runtime[AgentContext]):
         review_request = parse_memory_review_request(state.memory_review_request)
         if not review_request.candidates:
             return {"memory_saved_count": 0}
@@ -220,7 +240,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
         saved_count = 0
 
         for text in decision.accepted_texts:
-            if memory_service.add(text, source="extracted_confirmed"):
+            if memory_service(runtime).add(text, source="extracted_confirmed"):
                 saved_count += 1
 
         return {"memory_saved_count": saved_count}
@@ -250,7 +270,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
             return "execute_project_tools"
         return "generate_reply"
 
-    workflow = StateGraph(ChatState)
+    workflow = StateGraph(ChatState, context_schema=AgentContext)
     workflow.add_node("prepare_context", prepare_context)
     workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
@@ -276,9 +296,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None):
     workflow.add_edge("synthesize_speech", "extract_memory")
     workflow.add_edge("extract_memory", "review_memory")
     workflow.add_edge("review_memory", END)
-    if checkpointer is not None:
-        return workflow.compile(checkpointer=checkpointer)
-    return workflow.compile()
+    return workflow.compile(checkpointer=checkpointer, store=store)
 
 
 def _model_to_dict(model) -> dict:

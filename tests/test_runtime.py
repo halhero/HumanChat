@@ -6,7 +6,11 @@ from human_chat.session_models import SessionRecord
 
 
 class FakeGraph:
-    def invoke(self, graph_input, config):
+    def __init__(self):
+        self.contexts = []
+
+    def invoke(self, graph_input, config, context):
+        self.contexts.append(context)
         question = graph_input["question"]
         return {
             "messages": [
@@ -27,10 +31,11 @@ class RecordingSessionRepository:
 def test_runtime_persists_typed_session_metadata():
     repository = RecordingSessionRepository()
     session = SessionRecord.create()
+    graph = FakeGraph()
     runtime = ChatRuntime(
         settings=Settings(),
         session=session,
-        app=FakeGraph(),
+        app=graph,
         session_repository=repository,
         checkpoint_backend="sqlite",
         checkpoint_persistent=True,
@@ -42,6 +47,7 @@ def test_runtime_persists_typed_session_metadata():
     assert runtime.session.recoverable
     assert runtime.session.checkpoint_backend == "sqlite"
     assert repository.saved[-1] == runtime.session
+    assert graph.contexts[-1].user_id == runtime.settings.memory_user_id
 
 
 def test_ephemeral_runtime_does_not_require_session_repository():
