@@ -30,7 +30,7 @@ HumanChat/
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
-    cli.py                # Runtime helpers for one-shot and interactive execution
+    cli/                  # CLI app, commands, interrupts, and debug views
   speech/
     tmp.wav               # Generated speech output
   data/

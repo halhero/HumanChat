@@ -105,6 +105,9 @@ class ToolRegistry:
     def get_tools(self) -> list[Any]:
         return [registration.tool for registration in self._registrations]
 
+    def registrations(self) -> tuple[RegisteredTool, ...]:
+        return tuple(self._registrations)
+
     def describe_tools(self) -> list[ToolMetadata]:
         return [
             ToolMetadata.from_registration(registration)
