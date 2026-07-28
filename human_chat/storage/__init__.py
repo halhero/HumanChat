@@ -15,7 +15,7 @@ def create_session_repository(settings) -> SessionRepository:
 
 def create_memory_service(settings) -> MemoryService:
     namespace = default_memory_namespace(settings)
-    repository = JsonMemoryRepository(settings.memory_path, namespace)
+    repository = JsonMemoryRepository(settings.memory_path)
     return LongTermMemoryService(repository, namespace)
 
 

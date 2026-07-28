@@ -8,9 +8,6 @@ class MemoryService(Protocol):
     def load(self) -> LongTermMemory:
         ...
 
-    def save(self, memory: LongTermMemory) -> None:
-        ...
-
     def add(
         self,
         text: str,
@@ -36,10 +33,7 @@ class LongTermMemoryService:
         self.namespace = namespace
 
     def load(self) -> LongTermMemory:
-        return self.repository.load_memory(self.namespace)
-
-    def save(self, memory: LongTermMemory) -> None:
-        self.repository.save_memory(self.namespace, memory)
+        return LongTermMemory(items=self.repository.list_items(self.namespace))
 
     def add(
         self,
@@ -55,7 +49,7 @@ class LongTermMemoryService:
         if normalized in [item.text for item in items]:
             return False
 
-        self.repository.put_item(
+        self.repository.upsert_item(
             self.namespace,
             MemoryItem(
                 text=normalized,

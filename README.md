@@ -134,6 +134,7 @@ Graph / CLI -> MemoryService -> MemoryRepository -> JSON or LangGraph Store
 
 `MemoryService` owns validation, deduplication, deletion, and prompt formatting.
 `MemoryRepository` owns persistence, while the model classes contain no file or business operations.
+Repository operations are item-based: each `MemoryItem.id` is the stable persistence key, including when a LangGraph Store adapter is used.
 
 During chat, manage long-term memory with:
 

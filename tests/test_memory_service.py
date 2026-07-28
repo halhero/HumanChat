@@ -1,36 +1,32 @@
-from human_chat.memory_models import LongTermMemory, MemoryItem
+from human_chat.memory_models import MemoryItem
 from human_chat.memory_service import LongTermMemoryService
 
 
 class InMemoryRepository:
     def __init__(self):
-        self.memory = LongTermMemory()
-
-    def load_memory(self, namespace):
-        return self.memory
-
-    def save_memory(self, namespace, memory):
-        self.memory = memory
+        self.items = {}
 
     def list_items(self, namespace):
-        return list(self.memory.items)
+        return list(self.items.values())
 
-    def put_item(self, namespace, item):
-        self.memory.items = [existing for existing in self.memory.items if existing.id != item.id]
-        self.memory.items.append(item)
+    def get_item(self, namespace, item_id):
+        return self.items.get(item_id)
+
+    def upsert_item(self, namespace, item):
+        self.items[item.id] = item
 
     def delete_item(self, namespace, item_id):
-        original_count = len(self.memory.items)
-        self.memory.items = [item for item in self.memory.items if item.id != item_id]
-        return len(self.memory.items) != original_count
+        return self.items.pop(item_id, None) is not None
 
 
 def create_service():
-    return LongTermMemoryService(InMemoryRepository(), ("users", "test", "memory"))
+    repository = InMemoryRepository()
+    service = LongTermMemoryService(repository, ("users", "test", "memory"))
+    return service, repository
 
 
 def test_add_normalizes_and_deduplicates_memory_text():
-    service = create_service()
+    service, _ = create_service()
 
     assert service.add("  用户喜欢中文讲解。  ")
     assert not service.add("用户喜欢中文讲解。")
@@ -38,15 +34,11 @@ def test_add_normalizes_and_deduplicates_memory_text():
 
 
 def test_delete_uses_one_based_display_index():
-    service = create_service()
-    service.save(
-        LongTermMemory(
-            items=[
-                MemoryItem(text="第一条"),
-                MemoryItem(text="第二条"),
-            ]
-        )
-    )
+    service, repository = create_service()
+    first = MemoryItem(text="第一条")
+    second = MemoryItem(text="第二条")
+    repository.upsert_item(service.namespace, first)
+    repository.upsert_item(service.namespace, second)
 
     assert service.delete(2) == "第二条"
     assert [item.text for item in service.load().items] == ["第一条"]
@@ -54,7 +46,7 @@ def test_delete_uses_one_based_display_index():
 
 
 def test_format_for_prompt_uses_repository_items():
-    service = create_service()
+    service, _ = create_service()
 
     assert service.format_for_prompt() == "暂无长期记忆。"
 
