@@ -144,24 +144,31 @@ def _synchronize_session_recovery(
     repository: SessionRepository | None,
     persist_session: bool,
 ) -> SessionRecord:
-    has_existing_state = checkpoint.has_thread(session.thread_id)
-    recoverable = checkpoint.persistent and (
-        session.message_count == 0 or has_existing_state
+    has_existing_state = (
+        checkpoint.persistent
+        and checkpoint.has_thread(session.thread_id)
     )
+    recoverable = has_existing_state
 
-    if session.message_count > 0 and not has_existing_state:
+    if session.message_count > 0 and not recoverable:
         logger.warning(
-            "Session %s has metadata but no checkpoint state; it will resume without history.",
+            "Session %s has %s recorded messages but is not recoverable "
+            "with the %s checkpointer; it will resume without history.",
             session.id,
+            session.message_count,
+            checkpoint.backend,
         )
 
-    updated = session.model_copy(
-        update={
-            "checkpoint_backend": checkpoint.backend,
-            "recoverable": recoverable,
-            "updated_at": now_local(),
-        }
-    )
+    updates = {}
+    if session.checkpoint_backend != checkpoint.backend:
+        updates["checkpoint_backend"] = checkpoint.backend
+    if session.recoverable != recoverable:
+        updates["recoverable"] = recoverable
+
+    if not updates:
+        return session
+
+    updated = session.model_copy(update=updates)
     if persist_session and repository is not None:
         repository.save(updated)
     return updated
