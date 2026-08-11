@@ -8,7 +8,7 @@ from human_chat.memory_repository import (
 )
 
 
-def test_json_repository_creates_default_items(tmp_path):
+def test_json_repository_creates_empty_memory_file(tmp_path):
     namespace = ("users", "default", "memory")
     path = tmp_path / "memory.json"
     repository = JsonMemoryRepository(path)
@@ -16,7 +16,7 @@ def test_json_repository_creates_default_items(tmp_path):
     items = repository.list_items(namespace)
 
     assert path.exists()
-    assert items
+    assert items == []
 
 
 def test_json_repository_item_round_trip(tmp_path):

@@ -35,19 +35,4 @@ class LongTermMemory(BaseModel):
 
 
 def create_default_memory() -> LongTermMemory:
-    return LongTermMemory(
-        items=[
-            MemoryItem(text="用户偏好中文沟通和讲解。", source="default"),
-            MemoryItem(
-                text="用户希望在实际修改代码前，先看到设计说明和示例代码。",
-                source="default",
-            ),
-            MemoryItem(text="用户希望解释尽量适合新手理解。", source="default"),
-            MemoryItem(text="用户正在开发 HumanChat 项目。", source="default"),
-            MemoryItem(text="HumanChat 是一个聊天 Agent 项目。", source="default"),
-            MemoryItem(
-                text="HumanChat 当前使用 LangGraph、DashScope 兼容 OpenAI API 和 GPT-SoVITS。",
-                source="default",
-            ),
-        ]
-    )
+    return LongTermMemory()

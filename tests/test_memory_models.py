@@ -16,6 +16,6 @@ def test_default_memory_returns_independent_instances():
     first = create_default_memory()
     second = create_default_memory()
 
-    first.items.pop()
-
-    assert len(first.items) + 1 == len(second.items)
+    assert first.items == []
+    assert second.items == []
+    assert first.items is not second.items
