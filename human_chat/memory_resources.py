@@ -6,7 +6,6 @@ from human_chat.config import Settings
 from human_chat.memory_repository import (
     JsonMemoryRepository,
     LangGraphMemoryRepository,
-    MemoryRepository,
     default_memory_namespace,
 )
 from human_chat.memory_service import LongTermMemoryService, MemoryService
@@ -14,7 +13,6 @@ from human_chat.memory_service import LongTermMemoryService, MemoryService
 
 @dataclass(frozen=True)
 class MemoryResource:
-    repository: MemoryRepository
     service: MemoryService
     store: Any | None
     backend: str
@@ -32,7 +30,6 @@ def open_memory_resource(
     if selected_backend == "json":
         repository = JsonMemoryRepository(settings.memory_path)
         yield MemoryResource(
-            repository=repository,
             service=LongTermMemoryService(repository, namespace),
             store=None,
             backend="json",
@@ -46,7 +43,6 @@ def open_memory_resource(
         store = InMemoryStore()
         repository = LangGraphMemoryRepository(store)
         yield MemoryResource(
-            repository=repository,
             service=LongTermMemoryService(repository, namespace),
             store=store,
             backend="memory",
@@ -70,7 +66,6 @@ def open_memory_resource(
             store.setup()
             repository = LangGraphMemoryRepository(store)
             yield MemoryResource(
-                repository=repository,
                 service=LongTermMemoryService(repository, namespace),
                 store=store,
                 backend="postgres",

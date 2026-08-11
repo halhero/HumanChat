@@ -2,7 +2,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
-from langgraph.runtime import Runtime
 from langgraph.types import interrupt
 
 from human_chat.character import load_character
@@ -15,12 +14,7 @@ from human_chat.memory_review import (
     parse_memory_review_decision,
     parse_memory_review_request,
 )
-from human_chat.memory_repository import (
-    JsonMemoryRepository,
-    LangGraphMemoryRepository,
-    MemoryRepository,
-)
-from human_chat.memory_service import LongTermMemoryService
+from human_chat.memory_service import MemoryService
 from human_chat.schemas import AgentContext, ChatState, TtsResponse
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
 from human_chat.tts import TtsClient, TtsError
@@ -119,16 +113,14 @@ def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dic
 
 def build_graph(
     settings: Settings | None = None,
+    *,
+    memory_service: MemoryService,
     checkpointer=None,
     store=None,
-    memory_repository: MemoryRepository | None = None,
     tool_registry: ToolRegistry | None = None,
 ):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
-    fallback_memory_repository = memory_repository or JsonMemoryRepository(
-        settings.memory_path
-    )
     llm = create_chat_model(settings)
     active_tool_registry = tool_registry or create_tool_registry()
     project_tools = active_tool_registry.get_tools()
@@ -136,16 +128,9 @@ def build_graph(
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)
 
-    def memory_service(runtime: Runtime[AgentContext]):
-        repository = fallback_memory_repository
-        if runtime.store is not None:
-            repository = LangGraphMemoryRepository(runtime.store)
-        namespace = ("users", runtime.context.user_id, "memory")
-        return LongTermMemoryService(repository, namespace)
-
-    def prepare_context(state: ChatState, runtime: Runtime[AgentContext]):
+    def prepare_context(state: ChatState):
         return {
-            "memory_prompt": memory_service(runtime).format_for_prompt(),
+            "memory_prompt": memory_service.format_for_prompt(),
             "tool_messages": [],
             "tool_call_count": 0,
             "tool_events": [],
@@ -226,7 +211,7 @@ def build_graph(
             return {"memory_review_request": None}
         return {"memory_review_request": _model_to_dict(review_request)}
 
-    def review_memory(state: ChatState, runtime: Runtime[AgentContext]):
+    def review_memory(state: ChatState):
         review_request = parse_memory_review_request(state.memory_review_request)
         if not review_request.candidates:
             return {"memory_saved_count": 0}
@@ -241,7 +226,7 @@ def build_graph(
         saved_count = 0
 
         for text in decision.accepted_texts:
-            if memory_service(runtime).add(text, source="extracted_confirmed"):
+            if memory_service.add(text, source="extracted_confirmed"):
                 saved_count += 1
 
         return {"memory_saved_count": saved_count}

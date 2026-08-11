@@ -144,14 +144,6 @@ Available memory backends are `json` for local persistence, `memory` for LangGra
 HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
 ```
 
-To migrate the active user's existing JSON memories after configuring Postgres explicitly, run:
-
-```powershell
-python -m human_chat.memory_migration
-```
-
-Migration is idempotent and never runs automatically during application startup.
-
 During chat, manage long-term memory with:
 
 ```text

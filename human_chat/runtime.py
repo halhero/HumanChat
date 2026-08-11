@@ -133,7 +133,7 @@ def _build_runtime_graph(
         settings,
         checkpointer=checkpoint.saver,
         store=memory.store,
-        memory_repository=memory.repository,
+        memory_service=memory.service,
         tool_registry=tool_registry,
     )
 

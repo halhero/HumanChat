@@ -2,6 +2,9 @@ from human_chat.memory_models import MemoryItem
 from human_chat.memory_service import LongTermMemoryService
 
 
+TEST_NAMESPACE = ("users", "test", "memory")
+
+
 class InMemoryRepository:
     def __init__(self):
         self.items = {}
@@ -21,7 +24,7 @@ class InMemoryRepository:
 
 def create_service():
     repository = InMemoryRepository()
-    service = LongTermMemoryService(repository, ("users", "test", "memory"))
+    service = LongTermMemoryService(repository, TEST_NAMESPACE)
     return service, repository
 
 
@@ -37,8 +40,8 @@ def test_delete_uses_one_based_display_index():
     service, repository = create_service()
     first = MemoryItem(text="第一条")
     second = MemoryItem(text="第二条")
-    repository.upsert_item(service.namespace, first)
-    repository.upsert_item(service.namespace, second)
+    repository.upsert_item(TEST_NAMESPACE, first)
+    repository.upsert_item(TEST_NAMESPACE, second)
 
     assert service.delete(2) == "第二条"
     assert [item.text for item in service.load().items] == ["第一条"]
