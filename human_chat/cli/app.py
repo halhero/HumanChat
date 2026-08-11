@@ -102,17 +102,17 @@ def _choose_session(repository: SessionRepository) -> SessionRecord:
     choice = input("选择：").strip()
 
     if choice == "2":
-        session_id = recent_sessions[0].id
-        print(f"继续最近会话：{session_id}")
-        return repository.load(session_id)
+        session = recent_sessions[0]
+        print(f"继续最近会话：{session.id}")
+        return session
 
     if choice == "3":
         _print_recent_sessions(recent_sessions)
         selected = input("输入会话序号或会话 ID：").strip()
-        session_id = _resolve_session_id(selected, recent_sessions)
-        if session_id:
-            print(f"继续会话：{session_id}")
-            return repository.load(session_id)
+        session = _resolve_session(selected, recent_sessions)
+        if session is not None:
+            print(f"继续会话：{session.id}")
+            return session
         print("未找到该会话，将创建新会话。")
 
     return _create_new_session(repository)
@@ -134,17 +134,17 @@ def _print_recent_sessions(sessions: list[SessionRecord]) -> None:
         )
 
 
-def _resolve_session_id(
+def _resolve_session(
     value: str,
     sessions: list[SessionRecord],
-) -> str | None:
+) -> SessionRecord | None:
     if value.isdigit():
         index = int(value) - 1
         if 0 <= index < len(sessions):
-            return sessions[index].id
+            return sessions[index]
     for session in sessions:
         if session.id == value:
-            return session.id
+            return session
     return None
 
 
