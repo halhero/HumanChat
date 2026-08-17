@@ -1,13 +1,7 @@
-from dataclasses import dataclass
 from typing import Annotated, Any
 
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
-
-
-@dataclass(frozen=True)
-class AgentContext:
-    user_id: str
 
 
 class ChatState(BaseModel):
@@ -22,7 +16,3 @@ class ChatState(BaseModel):
     memory_prompt: str = ""
     assistant_text: str = ""
     tts_error: str = ""
-
-
-class TtsResponse(BaseModel):
-    text: str = Field(default="", description="Text to synthesize.")

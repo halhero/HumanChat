@@ -1,5 +1,4 @@
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
@@ -15,7 +14,7 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.memory_service import MemoryService
-from human_chat.schemas import AgentContext, ChatState, TtsResponse
+from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
 from human_chat.tts import TtsClient, TtsError
 
@@ -23,16 +22,16 @@ from human_chat.tts import TtsClient, TtsError
 logger = get_logger(__name__)
 
 
-STRUCTURED_OUTPUT_INSTRUCTION = """
-请以 JSON 格式返回，格式为：
-{"text": "你的回答"}
-"""
-
 TOOL_CALLING_PROMPT = """
 你可以使用项目只读工具获取 HumanChat 当前代码上下文。
 只有当用户问题需要查看项目文件、搜索代码或理解当前实现时才调用工具。
 如果工具结果仍不足以回答，可以继续调用工具。
 如果不需要工具，或者已经收集到足够信息，请直接给出简短结论，不要调用工具。
+"""
+
+TOOL_LIMIT_PROMPT = """
+本轮工具调用已经达到上限。请停止调用工具，并根据当前对话和已经获得的工具结果，
+直接给出最终回答。如果信息仍然不足，请明确说明缺少什么信息。
 """
 
 MAX_TOOL_CALL_ROUNDS = 3
@@ -44,38 +43,31 @@ def _build_system_prompt(character, memory_prompt: str) -> str:
         f"以下是你应该长期记住的用户和项目背景：\n"
         f"{memory_prompt}\n"
         f"请使用角色配置指定的语言回复：{character.reply_language}。\n"
-        f"{STRUCTURED_OUTPUT_INSTRUCTION}"
+        f"{TOOL_CALLING_PROMPT}"
     )
 
 
-def _format_tool_messages_for_prompt(tool_messages: list) -> str:
-    results = [
-        str(message.content)
-        for message in tool_messages
-        if getattr(message, "type", "") == "tool"
-    ]
-    if not results:
-        return "本轮没有调用工具。"
-    return "以下是本轮工具返回的项目上下文：\n" + "\n\n".join(results)
+def _message_text(message) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return str(content).strip()
 
-
-def _format_tool_limit_notice(state: ChatState) -> str:
-    if not state.tool_limit_reached:
-        return ""
-    return "\n\n注意：本轮工具调用已达到上限，请基于已经获得的工具结果回答。"
-
-
-def _build_tool_user_prompt(question: str) -> str:
-    return f"{TOOL_CALLING_PROMPT}\n\n用户问题：\n{question}"
-
-
-def _latest_tool_conversation(tool_messages: list, question: str) -> list:
-    user_prompt = _build_tool_user_prompt(question)
-    for index in range(len(tool_messages) - 1, -1, -1):
-        message = tool_messages[index]
-        if isinstance(message, HumanMessage) and message.content == user_prompt:
-            return tool_messages[index:]
-    return []
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+            continue
+        if isinstance(block, dict):
+            text = block.get("text")
+            if text is not None:
+                parts.append(str(text))
+                continue
+        text = getattr(block, "text", None)
+        if text is not None:
+            parts.append(str(text))
+    return "".join(parts).strip()
 
 
 def _tool_call_name(tool_call) -> str:
@@ -116,7 +108,6 @@ def build_graph(
     *,
     memory_service: MemoryService,
     checkpointer=None,
-    store=None,
     tool_registry: ToolRegistry | None = None,
 ):
     settings = settings or load_settings()
@@ -140,13 +131,19 @@ def build_graph(
         }
 
     def call_agent_model(state: ChatState):
-        conversation = _latest_tool_conversation(state.tool_messages, state.question)
-        if not conversation:
-            human_message = HumanMessage(content=_build_tool_user_prompt(state.question))
-            conversation = [human_message]
+        tool_messages = state.tool_messages or [
+            HumanMessage(content=state.question)
+        ]
+        conversation = [
+            SystemMessage(
+                content=_build_system_prompt(character, state.memory_prompt)
+            ),
+            *state.messages,
+            *tool_messages,
+        ]
 
         response = tool_llm.invoke(conversation)
-        return {"tool_messages": [*conversation, response]}
+        return {"tool_messages": [*tool_messages, response]}
 
     def execute_project_tools(state: ChatState):
         result = tool_node.invoke({"tool_messages": state.tool_messages})
@@ -157,34 +154,34 @@ def build_graph(
             "tool_events": [*state.tool_events, *_build_tool_events(state, tool_result_messages)],
         }
 
-    def generate_reply(state: ChatState):
-        current_tool_messages = _latest_tool_conversation(state.tool_messages, state.question)
-        tool_context = (
-            _format_tool_messages_for_prompt(current_tool_messages)
-            + _format_tool_limit_notice(state)
-        )
-        prompt_template = ChatPromptTemplate.from_messages(
-            [
-                ("system", _build_system_prompt(character, state.memory_prompt)),
-                ("system", tool_context),
-                MessagesPlaceholder("messages"),
-                ("human", "{question}"),
-            ]
-        )
-        chain = prompt_template | llm.with_structured_output(TtsResponse)
-        response = chain.invoke(
-            {
-                "question": state.question,
-                "messages": state.messages,
-            }
-        )
+    def generate_limit_reply(state: ChatState):
+        conversation = [
+            SystemMessage(
+                content=_build_system_prompt(character, state.memory_prompt)
+            ),
+            *state.messages,
+            *state.tool_messages,
+            SystemMessage(content=TOOL_LIMIT_PROMPT),
+        ]
+        response = llm.invoke(conversation)
+        return {"tool_messages": [*state.tool_messages, response]}
+
+    def finalize_reply(state: ChatState):
+        if not state.tool_messages:
+            raise RuntimeError("模型调用结束，但没有返回任何消息。")
+
+        response = state.tool_messages[-1]
+        assistant_text = _message_text(response)
+        if not assistant_text:
+            raise RuntimeError("模型没有返回可显示的文本回答。")
+
         logger.info("Generated assistant reply")
         return {
-            "assistant_text": response.text,
+            "assistant_text": assistant_text,
             "tts_error": "",
             "messages": [
                 HumanMessage(content=state.question),
-                AIMessage(content=response.text),
+                AIMessage(content=assistant_text),
             ],
         }
 
@@ -248,19 +245,20 @@ def build_graph(
 
     def route_after_agent_model(state: ChatState):
         if not state.tool_messages:
-            return "generate_reply"
+            return "finalize_reply"
         last_message = state.tool_messages[-1]
         if getattr(last_message, "tool_calls", None):
             if state.tool_call_count >= MAX_TOOL_CALL_ROUNDS:
                 return "mark_tool_limit_reached"
             return "execute_project_tools"
-        return "generate_reply"
+        return "finalize_reply"
 
-    workflow = StateGraph(ChatState, context_schema=AgentContext)
+    workflow = StateGraph(ChatState)
     workflow.add_node("prepare_context", prepare_context)
     workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
-    workflow.add_node("generate_reply", generate_reply)
+    workflow.add_node("generate_limit_reply", generate_limit_reply)
+    workflow.add_node("finalize_reply", finalize_reply)
     workflow.add_node("extract_memory", extract_memory)
     workflow.add_node("review_memory", review_memory)
     workflow.add_node("synthesize_speech", synthesize_speech)
@@ -273,16 +271,17 @@ def build_graph(
         {
             "execute_project_tools": "execute_project_tools",
             "mark_tool_limit_reached": "mark_tool_limit_reached",
-            "generate_reply": "generate_reply",
+            "finalize_reply": "finalize_reply",
         },
     )
     workflow.add_edge("execute_project_tools", "call_agent_model")
-    workflow.add_edge("mark_tool_limit_reached", "generate_reply")
-    workflow.add_edge("generate_reply", "synthesize_speech")
+    workflow.add_edge("mark_tool_limit_reached", "generate_limit_reply")
+    workflow.add_edge("generate_limit_reply", "finalize_reply")
+    workflow.add_edge("finalize_reply", "synthesize_speech")
     workflow.add_edge("synthesize_speech", "extract_memory")
     workflow.add_edge("extract_memory", "review_memory")
     workflow.add_edge("review_memory", END)
-    return workflow.compile(checkpointer=checkpointer, store=store)
+    return workflow.compile(checkpointer=checkpointer)
 
 
 def _model_to_dict(model) -> dict:

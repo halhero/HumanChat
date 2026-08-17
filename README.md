@@ -23,7 +23,7 @@ HumanChat/
     runtime.py            # Conversation runtime orchestration
     session_models.py     # Typed session metadata
     session_repository.py # Session persistence contract
-    schemas.py            # Graph state and structured output schemas
+    schemas.py            # Graph state schema
     stt.py                # Speech-to-text helpers
     storage/              # Storage composition and JSON repositories
     tool_provider.py      # Provider loading and shared ToolRegistry
@@ -101,6 +101,10 @@ tts:
   split_method: cut5
   speed_factor: 1.0
 ```
+
+Character identity and voice synthesis parameters come from this YAML file. Environment
+settings only control the TTS service endpoint, optional service startup, and deployment
+paths, so the same voice parameter does not have two competing configuration sources.
 
 Switch characters by setting:
 
@@ -189,6 +193,9 @@ The agent graph and the CLI commands use the same tool source:
 
 These tools are limited to files inside the project directory.
 The agent graph can decide to call these read-only tools before generating a reply when a question requires project context.
+The tool-capable model and ToolNode share one conversation chain; when no more tools are
+needed, the latest model message becomes the final reply instead of being discarded and
+generated a second time.
 In chat, `/tools` shows the currently registered tool metadata, including source, safety level, and usage.
 Providers load `RegisteredTool` entries once at runtime; a shared `ToolRegistry` validates names and commands, then serves the same LangChain tools to both the Graph and CLI.
 

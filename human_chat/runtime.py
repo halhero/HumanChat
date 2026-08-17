@@ -7,7 +7,6 @@ from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
 from human_chat.memory_resources import MemoryResource, open_memory_resource
 from human_chat.memory_service import MemoryService
-from human_chat.schemas import AgentContext
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -41,7 +40,6 @@ class ChatRuntime:
         self.tool_registry = tool_registry
         self.thread_id = session.thread_id
         self.graph_config = {"configurable": {"thread_id": self.thread_id}}
-        self.graph_context = AgentContext(user_id=settings.memory_user_id)
         self.messages = []
 
         if self.persist_session and self.session_repository is None:
@@ -51,7 +49,6 @@ class ChatRuntime:
         result = self.app.invoke(
             {"question": question},
             config=self.graph_config,
-            context=self.graph_context,
         )
         self._save_runtime_state(result)
         return result
@@ -62,7 +59,6 @@ class ChatRuntime:
         result = self.app.invoke(
             Command(resume=value),
             config=self.graph_config,
-            context=self.graph_context,
         )
         self._save_runtime_state(result)
         return result
@@ -132,7 +128,6 @@ def _build_runtime_graph(
     return build_graph(
         settings,
         checkpointer=checkpoint.saver,
-        store=memory.store,
         memory_service=memory.service,
         tool_registry=tool_registry,
     )

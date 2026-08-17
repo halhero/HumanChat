@@ -1,6 +1,6 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Iterator
 
 from human_chat.config import Settings
 from human_chat.memory_repository import (
@@ -14,7 +14,6 @@ from human_chat.memory_service import LongTermMemoryService, MemoryService
 @dataclass(frozen=True)
 class MemoryResource:
     service: MemoryService
-    store: Any | None
     backend: str
     persistent: bool
 
@@ -31,7 +30,6 @@ def open_memory_resource(
         repository = JsonMemoryRepository(settings.memory_path)
         yield MemoryResource(
             service=LongTermMemoryService(repository, namespace),
-            store=None,
             backend="json",
             persistent=True,
         )
@@ -44,7 +42,6 @@ def open_memory_resource(
         repository = LangGraphMemoryRepository(store)
         yield MemoryResource(
             service=LongTermMemoryService(repository, namespace),
-            store=store,
             backend="memory",
             persistent=False,
         )
@@ -67,7 +64,6 @@ def open_memory_resource(
             repository = LangGraphMemoryRepository(store)
             yield MemoryResource(
                 service=LongTermMemoryService(repository, namespace),
-                store=store,
                 backend="postgres",
                 persistent=True,
             )
