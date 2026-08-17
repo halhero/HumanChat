@@ -9,3 +9,4 @@ data/audio/*.wav
 data/sessions/*.json
 data/memory/*.json
 !data/memory/*.example.json
+config/mcp_servers.json

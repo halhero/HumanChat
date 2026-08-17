@@ -193,16 +193,18 @@ def _handle_tools(context: CliContext, arguments: str) -> None:
     if arguments.strip():
         print("用法：/tools")
         return
-    print("可用工具命令：")
+    print("当前已注册工具：")
     for metadata in context.runtime.tool_registry.describe_tools():
-        if not metadata.command:
-            continue
         safety = "只读" if metadata.read_only else "可写"
+        confirmation = "需确认" if metadata.requires_confirmation else "无需确认"
         print(
-            f"{metadata.command} - {metadata.description} "
-            f"[{metadata.source}, {safety}]"
+            f"{metadata.name} - {metadata.description} "
+            f"[{metadata.source}, {safety}, {confirmation}]"
         )
-        print(f"  用法：{metadata.usage}")
+        if metadata.command:
+            print(f"  CLI：{metadata.usage}")
+        else:
+            print("  CLI：仅供 Agent 调用")
 
 
 def _tool_handler(

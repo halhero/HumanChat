@@ -115,8 +115,11 @@ class ToolRegistry:
         ]
 
     def get_tool(self, name: str) -> Any:
+        return self.get_registration(name).tool
+
+    def get_registration(self, name: str) -> RegisteredTool:
         try:
-            return self._by_name[name].tool
+            return self._by_name[name]
         except KeyError as exc:
             raise KeyError(f"未知工具：{name}") from exc
 

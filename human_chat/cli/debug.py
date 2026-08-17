@@ -1,4 +1,5 @@
 from human_chat.memory_review import parse_memory_review_request
+from human_chat.tool_review import parse_tool_review_request
 
 
 def print_debug_summary(result: dict) -> None:
@@ -16,6 +17,8 @@ def print_debug_summary(result: dict) -> None:
             f"round={event.get('round')} "
             f"status={event.get('status')}"
         )
+    tool_review = parse_tool_review_request(result.get("tool_review_request"))
+    print(f"[debug] tool_review_calls={len(tool_review.calls)}")
     review_request = parse_memory_review_request(result.get("memory_review_request"))
     print(f"[debug] memory_review_candidates={len(review_request.candidates)}")
     if result.get("tts_error"):

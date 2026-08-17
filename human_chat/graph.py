@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
@@ -16,6 +16,12 @@ from human_chat.memory_review import (
 from human_chat.memory_service import MemoryService
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
+from human_chat.tool_review import (
+    create_tool_review_request,
+    parse_tool_review_decision,
+    redact_tool_arguments,
+    tool_calls_require_confirmation,
+)
 from human_chat.tts import TtsClient, TtsError
 
 
@@ -23,8 +29,9 @@ logger = get_logger(__name__)
 
 
 TOOL_CALLING_PROMPT = """
-你可以使用项目只读工具获取 HumanChat 当前代码上下文。
-只有当用户问题需要查看项目文件、搜索代码或理解当前实现时才调用工具。
+你可以使用当前注册的本地工具和 MCP 工具完成任务。
+只有当用户问题确实需要外部信息或操作时才调用工具。
+工具可能需要用户确认；系统会在执行前处理确认流程，不要绕过或虚构工具结果。
 如果工具结果仍不足以回答，可以继续调用工具。
 如果不需要工具，或者已经收集到足够信息，请直接给出简短结论，不要调用工具。
 """
@@ -82,6 +89,12 @@ def _tool_call_args(tool_call):
     return getattr(tool_call, "args", {})
 
 
+def _tool_call_id(tool_call) -> str:
+    if isinstance(tool_call, dict):
+        return str(tool_call.get("id", ""))
+    return str(getattr(tool_call, "id", ""))
+
+
 def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dict]:
     if not state.tool_messages:
         return []
@@ -91,12 +104,14 @@ def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dic
     for index, tool_call in enumerate(tool_calls):
         result_message = tool_result_messages[index] if index < len(tool_result_messages) else None
         content = str(getattr(result_message, "content", ""))
+        message_status = getattr(result_message, "status", None)
+        is_error = message_status == "error" or content.startswith("[tool_error]")
         events.append(
             {
                 "round": state.tool_call_count + 1,
                 "tool": _tool_call_name(tool_call),
-                "arguments": _tool_call_args(tool_call),
-                "status": "error" if content.startswith("[tool_error]") else "success",
+                "arguments": redact_tool_arguments(_tool_call_args(tool_call)),
+                "status": "error" if is_error else "success",
                 "result_preview": content[:300],
             }
         )
@@ -126,6 +141,8 @@ def build_graph(
             "tool_call_count": 0,
             "tool_events": [],
             "tool_limit_reached": False,
+            "tool_review_request": None,
+            "tool_review_approved": None,
             "memory_review_request": None,
             "memory_saved_count": 0,
         }
@@ -152,6 +169,61 @@ def build_graph(
             "tool_messages": [*state.tool_messages, *tool_result_messages],
             "tool_call_count": state.tool_call_count + 1,
             "tool_events": [*state.tool_events, *_build_tool_events(state, tool_result_messages)],
+            "tool_review_request": None,
+            "tool_review_approved": None,
+        }
+
+    def review_tool_calls(state: ChatState):
+        last_message = state.tool_messages[-1]
+        tool_calls = getattr(last_message, "tool_calls", []) or []
+        review_request = create_tool_review_request(
+            tool_calls,
+            active_tool_registry,
+        )
+        decision_data = interrupt(
+            {
+                "type": "tool_review",
+                "request": _model_to_dict(review_request),
+            }
+        )
+        decision = parse_tool_review_decision(decision_data)
+        return {
+            "tool_review_request": _model_to_dict(review_request),
+            "tool_review_approved": decision.approved,
+        }
+
+    def reject_tool_calls(state: ChatState):
+        last_message = state.tool_messages[-1]
+        tool_calls = getattr(last_message, "tool_calls", []) or []
+        rejected_messages = []
+        rejected_events = []
+
+        for tool_call in tool_calls:
+            name = _tool_call_name(tool_call)
+            rejected_messages.append(
+                ToolMessage(
+                    content="[tool_denied] 用户拒绝了本次工具调用。",
+                    tool_call_id=_tool_call_id(tool_call),
+                    name=name,
+                    status="error",
+                )
+            )
+            rejected_events.append(
+                {
+                    "round": state.tool_call_count + 1,
+                    "tool": name,
+                    "arguments": redact_tool_arguments(_tool_call_args(tool_call)),
+                    "status": "denied",
+                    "result_preview": "用户拒绝了本次工具调用。",
+                }
+            )
+
+        return {
+            "tool_messages": [*state.tool_messages, *rejected_messages],
+            "tool_call_count": state.tool_call_count + 1,
+            "tool_events": [*state.tool_events, *rejected_events],
+            "tool_review_request": None,
+            "tool_review_approved": None,
         }
 
     def generate_limit_reply(state: ChatState):
@@ -250,13 +322,25 @@ def build_graph(
         if getattr(last_message, "tool_calls", None):
             if state.tool_call_count >= MAX_TOOL_CALL_ROUNDS:
                 return "mark_tool_limit_reached"
+            if tool_calls_require_confirmation(
+                last_message.tool_calls,
+                active_tool_registry,
+            ):
+                return "review_tool_calls"
             return "execute_project_tools"
         return "finalize_reply"
+
+    def route_after_tool_review(state: ChatState):
+        if state.tool_review_approved:
+            return "execute_project_tools"
+        return "reject_tool_calls"
 
     workflow = StateGraph(ChatState)
     workflow.add_node("prepare_context", prepare_context)
     workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
+    workflow.add_node("review_tool_calls", review_tool_calls)
+    workflow.add_node("reject_tool_calls", reject_tool_calls)
     workflow.add_node("generate_limit_reply", generate_limit_reply)
     workflow.add_node("finalize_reply", finalize_reply)
     workflow.add_node("extract_memory", extract_memory)
@@ -270,11 +354,21 @@ def build_graph(
         route_after_agent_model,
         {
             "execute_project_tools": "execute_project_tools",
+            "review_tool_calls": "review_tool_calls",
             "mark_tool_limit_reached": "mark_tool_limit_reached",
             "finalize_reply": "finalize_reply",
         },
     )
+    workflow.add_conditional_edges(
+        "review_tool_calls",
+        route_after_tool_review,
+        {
+            "execute_project_tools": "execute_project_tools",
+            "reject_tool_calls": "reject_tool_calls",
+        },
+    )
     workflow.add_edge("execute_project_tools", "call_agent_model")
+    workflow.add_edge("reject_tool_calls", "call_agent_model")
     workflow.add_edge("mark_tool_limit_reached", "generate_limit_reply")
     workflow.add_edge("generate_limit_reply", "finalize_reply")
     workflow.add_edge("finalize_reply", "synthesize_speech")

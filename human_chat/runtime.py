@@ -10,7 +10,8 @@ from human_chat.memory_service import MemoryService
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
-from human_chat.tool_provider import ToolRegistry, create_tool_registry
+from human_chat.tool_provider import ToolRegistry
+from human_chat.tool_resources import open_tool_registry
 
 
 logger = get_logger(__name__)
@@ -93,30 +94,30 @@ def open_chat_runtime(
 
     with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
         with open_memory_resource(settings) as memory:
-            tool_registry = create_tool_registry()
-            active_session = _synchronize_session_recovery(
-                active_session,
-                checkpoint,
-                repository,
-                persist_session,
-            )
-            app = _build_runtime_graph(
-                settings,
-                checkpoint,
-                memory,
-                tool_registry,
-            )
-            yield ChatRuntime(
-                settings=settings,
-                session=active_session,
-                app=app,
-                persist_session=persist_session,
-                session_repository=repository,
-                checkpoint_backend=checkpoint.backend,
-                checkpoint_persistent=checkpoint.persistent,
-                memory_service=memory.service,
-                tool_registry=tool_registry,
-            )
+            with open_tool_registry(settings) as tool_registry:
+                active_session = _synchronize_session_recovery(
+                    active_session,
+                    checkpoint,
+                    repository,
+                    persist_session,
+                )
+                app = _build_runtime_graph(
+                    settings,
+                    checkpoint,
+                    memory,
+                    tool_registry,
+                )
+                yield ChatRuntime(
+                    settings=settings,
+                    session=active_session,
+                    app=app,
+                    persist_session=persist_session,
+                    session_repository=repository,
+                    checkpoint_backend=checkpoint.backend,
+                    checkpoint_persistent=checkpoint.persistent,
+                    memory_service=memory.service,
+                    tool_registry=tool_registry,
+                )
 
 
 def _build_runtime_graph(

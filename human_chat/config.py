@@ -40,6 +40,8 @@ class Settings(BaseModel):
     memory_postgres_uri: str = ""
     checkpoint_backend: str = "sqlite"
     checkpoint_allow_memory_fallback: bool = False
+    mcp_enabled: bool = False
+    mcp_fail_fast: bool = False
     mic_record_seconds: int = 5
     mic_sample_rate: int = 16000
 
@@ -47,6 +49,7 @@ class Settings(BaseModel):
     audio_temp_dir: Path = PROJECT_ROOT / "data" / "audio"
     memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
     checkpoint_path: Path = PROJECT_ROOT / "data" / "checkpoints" / "langgraph.sqlite"
+    mcp_config_path: Path = PROJECT_ROOT / "config" / "mcp_servers.json"
     speech_output_path: Path = PROJECT_ROOT / "speech" / "tmp.wav"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
 
@@ -77,12 +80,15 @@ _ENV_OVERRIDES = (
         "HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK",
         _parse_bool,
     ),
+    ("mcp_enabled", "HUMANCHAT_MCP_ENABLED", _parse_bool),
+    ("mcp_fail_fast", "HUMANCHAT_MCP_FAIL_FAST", _parse_bool),
     ("mic_record_seconds", "HUMANCHAT_MIC_RECORD_SECONDS", int),
     ("mic_sample_rate", "HUMANCHAT_MIC_SAMPLE_RATE", int),
     ("character_path", "HUMANCHAT_CHARACTER_PATH", _parse_path),
     ("audio_temp_dir", "HUMANCHAT_AUDIO_TEMP_DIR", _parse_path),
     ("memory_path", "HUMANCHAT_MEMORY_PATH", _parse_path),
     ("checkpoint_path", "HUMANCHAT_CHECKPOINT_PATH", _parse_path),
+    ("mcp_config_path", "HUMANCHAT_MCP_CONFIG_PATH", _parse_path),
     ("speech_output_path", "HUMANCHAT_SPEECH_OUTPUT_PATH", _parse_path),
     ("session_dir", "HUMANCHAT_SESSION_DIR", _parse_path),
     ("tts_service_url", "HUMANCHAT_TTS_SERVICE_URL", str),

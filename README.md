@@ -20,6 +20,8 @@ HumanChat/
     memory_models.py      # Long-term memory data models
     memory_repository.py  # JSON and LangGraph Store persistence adapters
     memory_service.py     # Long-term memory business rules
+    mcp_config.py         # MCP server configuration and validation
+    mcp_provider.py       # MCP discovery and sync/async tool adapter
     runtime.py            # Conversation runtime orchestration
     session_models.py     # Typed session metadata
     session_repository.py # Session persistence contract
@@ -27,6 +29,8 @@ HumanChat/
     stt.py                # Speech-to-text helpers
     storage/              # Storage composition and JSON repositories
     tool_provider.py      # Provider loading and shared ToolRegistry
+    tool_resources.py     # Managed local and MCP tool resources
+    tool_review.py        # Tool confirmation requests and redaction
     tools.py              # Safe local project tools
     tts.py                # GPT-SoVITS HTTP client and service helpers
     graph.py              # LangGraph workflow
@@ -36,6 +40,8 @@ HumanChat/
   data/
     memory/               # Long-term memory templates and local memory
     sessions/             # Saved chat sessions
+  config/
+    mcp_servers.example.json # Safe MCP configuration example
 ```
 
 ## Setup
@@ -198,6 +204,74 @@ needed, the latest model message becomes the final reply instead of being discar
 generated a second time.
 In chat, `/tools` shows the currently registered tool metadata, including source, safety level, and usage.
 Providers load `RegisteredTool` entries once at runtime; a shared `ToolRegistry` validates names and commands, then serves the same LangChain tools to both the Graph and CLI.
+
+## MCP Tools
+
+HumanChat can load tools from multiple MCP servers through the official
+`langchain-mcp-adapters` package. MCP is disabled by default, so local chat and project
+tools do not depend on external servers.
+
+Create a local configuration from the tracked example:
+
+```powershell
+Copy-Item config/mcp_servers.example.json config/mcp_servers.json
+```
+
+Enable the servers you want inside `config/mcp_servers.json`, then enable MCP:
+
+```env
+HUMANCHAT_MCP_ENABLED="true"
+HUMANCHAT_MCP_CONFIG_PATH="config/mcp_servers.json"
+HUMANCHAT_MCP_FAIL_FAST="false"
+```
+
+The real configuration file is ignored by Git. Connection values can reference secrets or
+machine-specific paths with `${VARIABLE_NAME}`; the referenced value must exist in the
+process environment.
+
+Each server uses the official MCP connection shape. For example:
+
+```json
+{
+  "version": 1,
+  "servers": {
+    "docs": {
+      "enabled": true,
+      "connection": {
+        "transport": "http",
+        "url": "https://docs.langchain.com/mcp"
+      },
+      "include_tools": [],
+      "exclude_tools": [],
+      "default_policy": {
+        "read_only": false,
+        "requires_confirmation": true
+      },
+      "tool_policies": {
+        "search_docs_by_lang_chain": {
+          "read_only": true,
+          "requires_confirmation": false
+        }
+      },
+      "startup_timeout_seconds": 15,
+      "tool_timeout_seconds": 60
+    }
+  }
+}
+```
+
+MCP tool names are always prefixed with the server name, such as
+`docs_search_docs_by_lang_chain`. This prevents collisions between servers and makes the
+tool source visible to the model and logs.
+
+Unknown MCP tools are treated as potentially writable and require confirmation. Policy is
+resolved from the MCP annotation, then the server default, then a per-tool override. Tool
+arguments with credential-like keys are redacted before confirmation and debug events.
+
+With `HUMANCHAT_MCP_FAIL_FAST="false"`, an unavailable server is logged and skipped while
+healthy servers and local tools remain available. Set it to `true` when every configured MCP
+server is a required production dependency. Use `/tools` to inspect all registered local and
+MCP tools; MCP tools are Agent-only unless a CLI command is explicitly assigned in code.
 
 ## Run
 

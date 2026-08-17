@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "servers": {
+    "langchain_docs": {
+      "enabled": false,
+      "connection": {
+        "transport": "http",
+        "url": "https://docs.langchain.com/mcp"
+      },
+      "include_tools": [],
+      "exclude_tools": [],
+      "default_policy": {
+        "read_only": false,
+        "requires_confirmation": true
+      },
+      "tool_policies": {
+        "search_docs_by_lang_chain": {
+          "read_only": true,
+          "requires_confirmation": false
+        },
+        "query_docs_filesystem_docs_by_lang_chain": {
+          "read_only": true,
+          "requires_confirmation": false
+        }
+      },
+      "startup_timeout_seconds": 15,
+      "tool_timeout_seconds": 60
+    },
+    "filesystem": {
+      "enabled": false,
+      "connection": {
+        "transport": "stdio",
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-filesystem",
+          "${HUMANCHAT_MCP_FILESYSTEM_ROOT}"
+        ]
+      },
+      "include_tools": [],
+      "exclude_tools": [],
+      "default_policy": {
+        "read_only": false,
+        "requires_confirmation": true
+      },
+      "tool_policies": {},
+      "startup_timeout_seconds": 20,
+      "tool_timeout_seconds": 60
+    }
+  }
+}

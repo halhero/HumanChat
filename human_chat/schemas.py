@@ -11,6 +11,8 @@ class ChatState(BaseModel):
     tool_call_count: int = 0
     tool_events: list[dict[str, Any]] = Field(default_factory=list)
     tool_limit_reached: bool = False
+    tool_review_request: dict[str, Any] | None = None
+    tool_review_approved: bool | None = None
     memory_review_request: dict[str, Any] | None = None
     memory_saved_count: int = 0
     memory_prompt: str = ""
