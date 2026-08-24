@@ -92,6 +92,9 @@ def open_chat_runtime(
     if persist_session and repository is None:
         repository = create_session_repository(settings)
 
+    # 资源上下文从外到内覆盖完整 Graph 生命周期。尤其 MCP 工具依赖
+    # open_tool_registry 持有的后台事件循环，因此必须在 ChatRuntime 使用完毕后
+    # 才能关闭，不能只在 build_graph 阶段短暂打开。
     with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
         with open_memory_resource(settings) as memory:
             with open_tool_registry(settings) as tool_registry:

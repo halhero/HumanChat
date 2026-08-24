@@ -129,12 +129,16 @@ def build_graph(
     character = load_character(settings.character_path)
     llm = create_chat_model(settings)
     active_tool_registry = tool_registry or create_tool_registry()
+    # Graph 只消费统一注册表中的 LangChain Tool，不区分本地实现和 MCP 来源。
+    # 来源、安全策略和同步/异步适配都已在 Provider 层完成。
     project_tools = active_tool_registry.get_tools()
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
     tts_client = TtsClient(settings, character)
 
     def prepare_context(state: ChatState):
+        # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
+        # 防止上一轮对某个工具的批准被错误复用于下一轮调用。
         return {
             "memory_prompt": memory_service.format_for_prompt(),
             "tool_messages": [],
@@ -163,6 +167,8 @@ def build_graph(
         return {"tool_messages": [*tool_messages, response]}
 
     def execute_project_tools(state: ChatState):
+        # ToolNode 使用模型产生的原始 tool call，因此审批界面中的参数脱敏副本不会
+        # 改写真正的调用参数。MCP 工具的同步入口已由 McpToolProvider 注入。
         result = tool_node.invoke({"tool_messages": state.tool_messages})
         tool_result_messages = result.get("tool_messages", [])
         return {
@@ -174,12 +180,16 @@ def build_graph(
         }
 
     def review_tool_calls(state: ChatState):
+        """暂停 Graph，等待调用方明确批准这一批高风险工具。"""
+
         last_message = state.tool_messages[-1]
         tool_calls = getattr(last_message, "tool_calls", []) or []
         review_request = create_tool_review_request(
             tool_calls,
             active_tool_registry,
         )
+        # interrupt 会把状态持久化到 checkpointer，并把审批请求交还 CLI。恢复时
+        # Command(resume=...) 的值会成为这里的返回值，然后 Graph 从本节点继续。
         decision_data = interrupt(
             {
                 "type": "tool_review",
@@ -193,6 +203,8 @@ def build_graph(
         }
 
     def reject_tool_calls(state: ChatState):
+        """在不执行工具的情况下，为每个被拒调用生成协议完整的结果消息。"""
+
         last_message = state.tool_messages[-1]
         tool_calls = getattr(last_message, "tool_calls", []) or []
         rejected_messages = []
@@ -200,6 +212,8 @@ def build_graph(
 
         for tool_call in tool_calls:
             name = _tool_call_name(tool_call)
+            # OpenAI/LangChain 工具协议要求每个 tool_call_id 都对应一个 ToolMessage。
+            # 仅跳过 ToolNode 会留下悬空调用，后续模型请求可能因此被服务端拒绝。
             rejected_messages.append(
                 ToolMessage(
                     content="[tool_denied] 用户拒绝了本次工具调用。",
@@ -322,6 +336,8 @@ def build_graph(
         if getattr(last_message, "tool_calls", None):
             if state.tool_call_count >= MAX_TOOL_CALL_ROUNDS:
                 return "mark_tool_limit_reached"
+            # 一个模型回复可以同时请求多个工具。只要其中一个受保护，就先审批
+            # 整个批次，避免可写调用夹在只读调用中绕过人工确认。
             if tool_calls_require_confirmation(
                 last_message.tool_calls,
                 active_tool_registry,
@@ -331,6 +347,7 @@ def build_graph(
         return "finalize_reply"
 
     def route_after_tool_review(state: ChatState):
+        # 审批只有两个出口：批准才进入真实 ToolNode；其他值包括缺失值都拒绝。
         if state.tool_review_approved:
             return "execute_project_tools"
         return "reject_tool_calls"
@@ -359,6 +376,8 @@ def build_graph(
             "finalize_reply": "finalize_reply",
         },
     )
+    # 工具审批是 Graph 的一等节点，而不是 CLI 在 Graph 外自行调用工具。这样暂停、
+    # 恢复和 checkpoint 都保持在 LangGraph 的状态机语义内。
     workflow.add_conditional_edges(
         "review_tool_calls",
         route_after_tool_review,

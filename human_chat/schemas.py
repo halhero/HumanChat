@@ -11,6 +11,8 @@ class ChatState(BaseModel):
     tool_call_count: int = 0
     tool_events: list[dict[str, Any]] = Field(default_factory=list)
     tool_limit_reached: bool = False
+    # 工具审批快照进入 Graph state/checkpoint；真正执行仍读取 tool_messages 中的
+    # 原始 tool call，避免展示用的脱敏参数污染执行参数。
     tool_review_request: dict[str, Any] | None = None
     tool_review_approved: bool | None = None
     memory_review_request: dict[str, Any] | None = None

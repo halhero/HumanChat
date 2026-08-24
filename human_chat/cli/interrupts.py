@@ -14,6 +14,13 @@ from human_chat.tool_review import (
 
 
 def handle_graph_interrupts(runtime: ChatRuntime, result: dict) -> dict | None:
+    """处理当前执行及后续恢复过程中连续出现的 Graph interrupt。
+
+    一次提问可能先审批 MCP 工具，工具执行并生成回答后又触发长期记忆审批，所以
+    不能只处理第一次 interrupt。每次 resume 后继续检查结果，直到 Graph 完成或
+    遇到当前 CLI 不认识的 interrupt。
+    """
+
     current_result = result
     latest_resume_result = None
 
@@ -27,6 +34,8 @@ def handle_graph_interrupts(runtime: ChatRuntime, result: dict) -> dict | None:
             decision = _prompt_interrupt_decision(payload)
             if decision is None:
                 continue
+            # 决定通过 LangGraph Command(resume=...) 回到原暂停节点，而不是在 CLI
+            # 中直接调用工具，从而保留 Graph 的 checkpoint 和路由一致性。
             current_result = runtime.resume(_model_to_dict(decision))
             latest_resume_result = current_result
             handled = True
@@ -37,6 +46,8 @@ def handle_graph_interrupts(runtime: ChatRuntime, result: dict) -> dict | None:
 
 
 def _prompt_interrupt_decision(payload):
+    """按显式 type 字段把 interrupt 分派给对应的人机交互逻辑。"""
+
     if not isinstance(payload, dict):
         print("收到暂不支持的 Graph interrupt，已跳过。")
         return None
@@ -54,6 +65,8 @@ def _prompt_interrupt_decision(payload):
 
 
 def extract_interrupt_payloads(result: dict) -> list:
+    """兼容 LangGraph Interrupt 对象和序列化后的字典表示。"""
+
     interrupts = result.get("__interrupt__") or []
     if not isinstance(interrupts, (list, tuple)):
         interrupts = [interrupts]
@@ -86,6 +99,8 @@ def prompt_memory_review_decision(
 def prompt_tool_review_decision(
     review_request: ToolReviewRequest,
 ) -> ToolReviewDecision:
+    """向 CLI 用户展示脱敏调用信息，并以默认拒绝方式收集决定。"""
+
     print("模型请求执行需要确认的工具：")
     for index, call in enumerate(review_request.calls, start=1):
         safety = "只读" if call.read_only else "可能修改外部状态"
@@ -95,6 +110,7 @@ def prompt_tool_review_decision(
             + json.dumps(call.arguments, ensure_ascii=False, default=str)
         )
 
+    # 只有明确输入 y 才批准；回车或未知文本都不会放行受保护操作。
     choice = input("批准执行以上工具？y/N：").strip().lower()
     return ToolReviewDecision(approved=choice == "y")
 
