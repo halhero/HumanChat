@@ -40,8 +40,14 @@ class McpPolicyConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    read_only: bool | None = None
-    requires_confirmation: bool | None = None
+    read_only: bool | None = Field(
+        default=None,
+        description="工具是否只读取数据而不修改外部状态。",
+    )
+    requires_confirmation: bool | None = Field(
+        default=None,
+        description="Graph 执行工具前是否必须暂停并等待用户明确批准。",
+    )
 
 
 class McpServerConfig(BaseModel):
@@ -54,14 +60,43 @@ class McpServerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
-    connection: dict[str, Any]
-    include_tools: list[str] = Field(default_factory=list)
-    exclude_tools: list[str] = Field(default_factory=list)
-    default_policy: McpPolicyConfig = Field(default_factory=McpPolicyConfig)
-    tool_policies: dict[str, McpPolicyConfig] = Field(default_factory=dict)
-    startup_timeout_seconds: float = Field(default=15.0, gt=0)
-    tool_timeout_seconds: float = Field(default=60.0, gt=0)
+    enabled: bool = Field(
+        default=True,
+        description="是否加载这个 Server；关闭后不连接也不发现它的工具。",
+    )
+    connection: dict[str, Any] = Field(
+        description="传给 LangChain MCP Adapter 的 transport 及连接参数。",
+    )
+    include_tools: list[str] = Field(
+        default_factory=list,
+        description="允许注册的原始工具名白名单；空列表表示不启用白名单限制。",
+    )
+    exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="明确禁止注册的原始工具名，优先于 include_tools。",
+    )
+    default_policy: McpPolicyConfig = Field(
+        default_factory=McpPolicyConfig,
+        description="这个 Server 中所有工具共用的默认安全策略。",
+    )
+    tool_policies: dict[str, McpPolicyConfig] = Field(
+        default_factory=dict,
+        description="按原始工具名覆盖 default_policy 的单工具安全策略。",
+    )
+    startup_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        description=(
+            "连接 MCP Server 并完成工具发现允许等待的最长秒数；超时会取消发现任务。"
+        ),
+    )
+    tool_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "该 Server 中每一次具体工具调用允许等待的最长秒数；超时会取消调用任务。"
+        ),
+    )
 
     @field_validator("include_tools", "exclude_tools")
     @classmethod
@@ -133,8 +168,14 @@ class McpConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[1] = 1
-    servers: dict[str, McpServerConfig] = Field(default_factory=dict)
+    version: Literal[1] = Field(
+        default=1,
+        description="MCP 配置格式版本，当前只支持版本 1。",
+    )
+    servers: dict[str, McpServerConfig] = Field(
+        default_factory=dict,
+        description="以唯一 Server 名称为键的 MCP Server 配置集合。",
+    )
 
     @model_validator(mode="after")
     def validate_server_names(self) -> "McpConfig":

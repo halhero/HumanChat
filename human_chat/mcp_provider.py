@@ -74,8 +74,20 @@ class McpAsyncBridge:
     ) -> Any:
         """在线程事件循环中执行 awaitable，并同步等待结果。
 
-        ``operation`` 只用于构造可诊断的超时错误，不参与业务逻辑。超时时会取消
-        后台 Future，避免已经失去调用方的远程任务继续无限运行。
+        参数：
+            awaitable: 要提交到 MCP 后台事件循环的异步任务，例如工具发现或调用。
+            timeout: 当前任务最多允许执行的秒数。调用者分别传入 Server 的启动
+                超时或工具调用超时字段。
+            operation: 面向日志和异常的操作名称，只用于说明“哪个操作超时”，
+                不参与 MCP 请求。
+
+        返回：
+            异步任务完成后的真实结果。这个方法会阻塞当前同步线程，直到任务完成、
+            抛出异常或达到 ``timeout``。
+
+        异常：
+            McpOperationTimeout: 达到超时时间后取消后台 Future，并提供操作上下文。
+            RuntimeError: 桥接器已经关闭，不能再接收新任务。
         """
 
         if self._closed:
@@ -147,6 +159,19 @@ class McpToolProvider:
         *,
         fail_fast: bool,
     ):
+        """保存 Provider 构建工具注册表所需的依赖。
+
+        参数：
+            configuration: 已通过 Pydantic 校验的完整 MCP 配置。
+            config_directory: 配置文件所在目录，用于解析 stdio 的相对 ``cwd``。
+            bridge: 由外层资源管理器持有的异步桥接器，本类只使用、不负责关闭。
+            fail_fast: 任一 Server 失败时是否立即终止注册表构建；为 ``False`` 时
+                记录错误并继续加载其他 Server。
+
+        ``loaded_server_count`` 和 ``loaded_tool_count`` 是本次加载结果的可观测指标，
+        供启动日志使用，不参与工具路由。
+        """
+
         self._configuration = configuration
         self._config_directory = config_directory
         self._bridge = bridge
@@ -198,7 +223,11 @@ class McpToolProvider:
         server_name: str,
         server: McpServerConfig,
     ) -> list[RegisteredTool]:
-        """完成一个 Server 的连接解析、工具发现、过滤和注册。"""
+        """完成一个 Server 的连接解析、工具发现、过滤和注册。
+
+        ``server.startup_timeout_seconds`` 只约束本方法前半段的连接与工具发现；
+        注册完成后的每次工具执行由 ``server.tool_timeout_seconds`` 单独约束。
+        """
 
         # 配置中仍可能含 ${ENV_NAME} 和相对 cwd；直到真正连接前才解析真实值。
         connection = resolve_mcp_connection(
@@ -206,8 +235,9 @@ class McpToolProvider:
             server,
             self._config_directory,
         )
-        # 官方 Adapter 的发现接口是异步的，通过共享桥接器同步等待，并用独立的
-        # startup timeout 防止不可达 Server 阻塞整个应用启动。
+        # startup_timeout_seconds 是 McpServerConfig 的字段，不是方法。这里读取它
+        # 的秒数值，传给 McpAsyncBridge.run(timeout=...)，防止不可达 Server
+        # 无限阻塞应用启动。
         tools = self._bridge.run(
             self._discover_tools(server_name, connection),
             timeout=server.startup_timeout_seconds,
@@ -229,8 +259,8 @@ class McpToolProvider:
             if original_name in server.exclude_tools:
                 continue
 
-            # ToolNode 可能沿同步路径调用工具，因此为只有 coroutine 的 MCP 工具
-            # 补充同步入口；原 coroutine 保留，异步消费者仍可直接使用。
+            # tool_timeout_seconds 同样是配置字段。它会被同步入口捕获，之后这个
+            # 工具每次被 ToolNode 调用时，都以该值限制最长执行时间。
             self._add_sync_entrypoint(
                 tool,
                 server_name,
@@ -290,7 +320,8 @@ class McpToolProvider:
 
         ``runtime`` 是 LangChain 注入参数，不应出现在模型生成的参数 Schema 中；
         ``InjectedToolArg`` 正是用于表达这个边界。这里直接复用 Adapter 创建的
-        coroutine，避免重新实现 MCP 请求协议。
+        coroutine，避免重新实现 MCP 请求协议。参数 ``timeout`` 来自当前 Server 的
+        ``tool_timeout_seconds``，作用于之后的每一次工具执行，而不是工具发现阶段。
         """
 
         coroutine = getattr(tool, "coroutine", None)
