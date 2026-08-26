@@ -44,6 +44,14 @@ class Settings(BaseModel):
     mcp_fail_fast: bool = False
     mic_record_seconds: int = 5
     mic_sample_rate: int = 16000
+    api_host: str = "127.0.0.1"
+    api_port: int = Field(default=8000, ge=1, le=65535)
+    api_cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ]
+    )
 
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
     audio_temp_dir: Path = PROJECT_ROOT / "data" / "audio"
@@ -84,6 +92,17 @@ _ENV_OVERRIDES = (
     ("mcp_fail_fast", "HUMANCHAT_MCP_FAIL_FAST", _parse_bool),
     ("mic_record_seconds", "HUMANCHAT_MIC_RECORD_SECONDS", int),
     ("mic_sample_rate", "HUMANCHAT_MIC_SAMPLE_RATE", int),
+    ("api_host", "HUMANCHAT_API_HOST", str),
+    ("api_port", "HUMANCHAT_API_PORT", int),
+    (
+        "api_cors_origins",
+        "HUMANCHAT_API_CORS_ORIGINS",
+        lambda value: [
+            origin.strip()
+            for origin in value.split(",")
+            if origin.strip()
+        ],
+    ),
     ("character_path", "HUMANCHAT_CHARACTER_PATH", _parse_path),
     ("audio_temp_dir", "HUMANCHAT_AUDIO_TEMP_DIR", _parse_path),
     ("memory_path", "HUMANCHAT_MEMORY_PATH", _parse_path),

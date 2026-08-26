@@ -79,6 +79,93 @@ class ChatRuntime:
             self.session_repository.save(self.session)
 
 
+class ChatApplication:
+    """Own shared Agent resources and create lightweight per-session runtimes.
+
+    A web process can serve many HTTP requests during its lifetime. Opening the
+    checkpointer, memory store, MCP providers, and compiled graph for every request would
+    repeatedly create database connections and rediscover remote tools. This object keeps
+    those expensive resources at application scope while preserving session isolation
+    through each runtime's LangGraph ``thread_id``.
+
+    Resource cleanup remains the responsibility of ``open_chat_application``.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        app,
+        session_repository: SessionRepository,
+        checkpoint: CheckpointerResource,
+        memory: MemoryResource,
+        tool_registry: ToolRegistry,
+    ):
+        self.settings = settings
+        self.app = app
+        self.session_repository = session_repository
+        self.checkpoint = checkpoint
+        self.memory = memory
+        self.tool_registry = tool_registry
+
+    def create_runtime(
+        self,
+        session: SessionRecord | None = None,
+        *,
+        persist_session: bool = True,
+    ) -> ChatRuntime:
+        """Create a session-scoped view over the shared compiled graph."""
+
+        active_session = session or SessionRecord.create()
+        active_session = _synchronize_session_recovery(
+            active_session,
+            self.checkpoint,
+            self.session_repository,
+            persist_session,
+        )
+        return ChatRuntime(
+            settings=self.settings,
+            session=active_session,
+            app=self.app,
+            persist_session=persist_session,
+            session_repository=(
+                self.session_repository if persist_session else None
+            ),
+            checkpoint_backend=self.checkpoint.backend,
+            checkpoint_persistent=self.checkpoint.persistent,
+            memory_service=self.memory.service,
+            tool_registry=self.tool_registry,
+        )
+
+
+@contextmanager
+def open_chat_application(
+    settings: Settings,
+    *,
+    session_repository: SessionRepository | None = None,
+    checkpoint_backend: str | None = None,
+) -> Iterator[ChatApplication]:
+    """Open process-scoped resources used by CLI or HTTP application lifetimes."""
+
+    repository = session_repository or create_session_repository(settings)
+    with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
+        with open_memory_resource(settings) as memory:
+            with open_tool_registry(settings) as tool_registry:
+                app = _build_runtime_graph(
+                    settings,
+                    checkpoint,
+                    memory,
+                    tool_registry,
+                )
+                yield ChatApplication(
+                    settings=settings,
+                    app=app,
+                    session_repository=repository,
+                    checkpoint=checkpoint,
+                    memory=memory,
+                    tool_registry=tool_registry,
+                )
+
+
 @contextmanager
 def open_chat_runtime(
     settings: Settings,
@@ -87,40 +174,21 @@ def open_chat_runtime(
     session_repository: SessionRepository | None = None,
     checkpoint_backend: str | None = None,
 ) -> Iterator[ChatRuntime]:
-    active_session = session or SessionRecord.create()
     repository = session_repository
     if persist_session and repository is None:
         repository = create_session_repository(settings)
 
-    # 资源上下文从外到内覆盖完整 Graph 生命周期。尤其 MCP 工具依赖
-    # open_tool_registry 持有的后台事件循环，因此必须在 ChatRuntime 使用完毕后
-    # 才能关闭，不能只在 build_graph 阶段短暂打开。
-    with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
-        with open_memory_resource(settings) as memory:
-            with open_tool_registry(settings) as tool_registry:
-                active_session = _synchronize_session_recovery(
-                    active_session,
-                    checkpoint,
-                    repository,
-                    persist_session,
-                )
-                app = _build_runtime_graph(
-                    settings,
-                    checkpoint,
-                    memory,
-                    tool_registry,
-                )
-                yield ChatRuntime(
-                    settings=settings,
-                    session=active_session,
-                    app=app,
-                    persist_session=persist_session,
-                    session_repository=repository,
-                    checkpoint_backend=checkpoint.backend,
-                    checkpoint_persistent=checkpoint.persistent,
-                    memory_service=memory.service,
-                    tool_registry=tool_registry,
-                )
+    # The CLI still receives one context-managed runtime, while the same resource owner can
+    # now be reused by a long-running FastAPI lifespan.
+    with open_chat_application(
+        settings,
+        session_repository=repository,
+        checkpoint_backend=checkpoint_backend,
+    ) as application:
+        yield application.create_runtime(
+            session,
+            persist_session=persist_session,
+        )
 
 
 def _build_runtime_graph(

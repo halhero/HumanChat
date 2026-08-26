@@ -22,6 +22,7 @@ HumanChat/
     memory_service.py     # Long-term memory business rules
     mcp_config.py         # MCP server configuration and validation
     mcp_provider.py       # MCP discovery and sync/async tool adapter
+    api/                  # FastAPI application, routes, and public schemas
     runtime.py            # Conversation runtime orchestration
     session_models.py     # Typed session metadata
     session_repository.py # Session persistence contract
@@ -287,6 +288,31 @@ and MCP tools; MCP tools are Agent-only unless a CLI command is explicitly assig
 ```powershell
 python main.py
 ```
+
+Run the versioned backend API separately with:
+
+```powershell
+python -m human_chat.api
+```
+
+The API binds to `127.0.0.1:8000` by default. Its readiness endpoint is:
+
+```text
+GET http://127.0.0.1:8000/api/v1/health
+```
+
+Configure the local frontend origins and bind address through:
+
+```env
+HUMANCHAT_API_HOST="127.0.0.1"
+HUMANCHAT_API_PORT="8000"
+HUMANCHAT_API_CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
+```
+
+The API uses a FastAPI lifespan to open the shared checkpointer, memory resource, tool
+registry, and compiled graph once per process. Importing `human_chat.api` does not open
+those resources; they are acquired when the ASGI application starts and released when it
+shuts down.
 
 The current entry point starts an interactive chat loop. Type `exit`, `quit`, `q`, or `退出` to stop.
 On startup, HumanChat lets you create a new session, continue the latest session, or choose from recent sessions.
