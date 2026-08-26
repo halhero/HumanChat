@@ -172,6 +172,15 @@ class McpConfig(BaseModel):
         default=1,
         description="MCP 配置格式版本，当前只支持版本 1。",
     )
+    max_concurrent_server_discoveries: int = Field(
+        default=4,
+        ge=1,
+        le=32,
+        description=(
+            "启动阶段最多同时连接并发现多少个 MCP Server；用于限制网络连接和 "
+            "stdio 子进程并发量。"
+        ),
+    )
     servers: dict[str, McpServerConfig] = Field(
         default_factory=dict,
         description="以唯一 Server 名称为键的 MCP Server 配置集合。",

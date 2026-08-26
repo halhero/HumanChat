@@ -30,6 +30,10 @@ from human_chat.tool_provider import RegisteredTool, ToolPolicy
 
 logger = get_logger(__name__)
 
+# 批量发现内部已经对每个 Server 应用独立 startup timeout。这里的额外时间只用于
+# 允许任务取消和传输资源清理完成，避免同步调用方比后台 loop 更早放弃整个批次。
+DISCOVERY_BATCH_GRACE_SECONDS = 5.0
+
 
 class McpDependencyError(RuntimeError):
     """启用了 MCP，但官方 LangChain MCP Adapter 依赖不可用。"""
@@ -180,69 +184,156 @@ class McpToolProvider:
         self.loaded_tool_count = 0
 
     def load_tools(self) -> list[RegisteredTool]:
-        """依次加载所有启用的 Server，并汇总为统一注册项。"""
+        """并发发现所有启用的 Server，再按配置顺序生成工具注册项。
 
-        registrations = []
-        enabled_servers = [
+        网络连接和工具发现发生在后台事件循环中，可以并发等待；工具过滤、策略
+        解析和注册仍在当前同步线程按配置顺序完成，因此最终工具顺序是确定的。
+        """
+
+        registrations: list[RegisteredTool] = []
+        enabled_servers: list[tuple[str, McpServerConfig]] = [
             (name, server)
             for name, server in self._configuration.servers.items()
             if server.enabled
         ]
+        if not enabled_servers:
+            return registrations
 
-        for server_name, server in enabled_servers:
+        # 只跨线程提交一次批量协程。future.result() 会阻塞当前同步线程，但后台 loop
+        # 已经同时调度多个 Server Task，因此网络和进程等待时间可以重叠。
+        discoveries = self._bridge.run(
+            self._discover_enabled_servers(enabled_servers),
+            timeout=self._discovery_batch_timeout(enabled_servers),
+            operation="MCP Server 批量工具发现",
+        )
+
+        # gather 按传入顺序返回结果，即使 Server 的实际完成顺序不同，也不会改变
+        # ToolRegistry 中的注册顺序和冲突检测顺序。
+        for (server_name, server), discovery in zip(
+            enabled_servers,
+            discoveries,
+            strict=True,
+        ):
+            if isinstance(discovery, BaseException):
+                self._handle_server_failure(server_name, discovery)
+                continue
+
             try:
-                server_registrations = self._load_server_tools(
+                server_registrations = self._register_server_tools(
                     server_name,
                     server,
+                    discovery,
                 )
-            # 缺少进程级依赖并不是单个 Server 的临时故障，跳过所有 Server 也无法
-            # 恢复，因此无论 fail_fast 如何都应直接暴露给启动入口。
-            except McpDependencyError:
-                raise
             except Exception as exc:
-                if self._fail_fast:
-                    raise RuntimeError(
-                        f"MCP Server '{server_name}' 加载失败。"
-                    ) from exc
-                logger.exception(
-                    "MCP server %s failed to load and will be skipped",
-                    server_name,
-                )
+                self._handle_server_failure(server_name, exc)
                 continue
 
             registrations.extend(server_registrations)
             self.loaded_server_count += 1
             self.loaded_tool_count += len(server_registrations)
 
-        if enabled_servers and not registrations:
+        if not registrations:
             logger.warning("No MCP tools were loaded from the enabled servers")
         return registrations
 
-    def _load_server_tools(
+    async def _discover_enabled_servers(
+        self,
+        enabled_servers: list[tuple[str, McpServerConfig]],
+    ) -> list:
+        """创建具名 Task，并在当前 MCP 事件循环中受控并发发现工具。
+
+        ``return_exceptions=True`` 仅用于非 fail-fast 模式，使单个 Server 的异常成为
+        对应位置的结果并由同步层记录。fail-fast 模式让首个异常立即向上传播，同时
+        在 ``finally`` 中取消仍未完成的 Server Task。
+        """
+
+        client_class = _load_mcp_client_class()
+        concurrency = min(
+            self._configuration.max_concurrent_server_discoveries,
+            len(enabled_servers),
+        )
+        semaphore = asyncio.Semaphore(concurrency)
+        tasks = [
+            asyncio.create_task(
+                self._discover_server_tools(
+                    server_name,
+                    server,
+                    semaphore,
+                    client_class,
+                ),
+                name=f"mcp-discovery:{server_name}",
+            )
+            for server_name, server in enabled_servers
+        ]
+
+        try:
+            return await asyncio.gather(
+                *tasks,
+                return_exceptions=not self._fail_fast,
+            )
+        finally:
+            # gather 在默认模式下遇到异常不会自动取消其他子任务。显式取消并等待
+            # 可以实现真正的 fail-fast，也能在批量任务被外部取消时完整回收资源。
+            unfinished = [task for task in tasks if not task.done()]
+            for task in unfinished:
+                task.cancel()
+            if unfinished:
+                await asyncio.gather(*unfinished, return_exceptions=True)
+
+    async def _discover_server_tools(
         self,
         server_name: str,
         server: McpServerConfig,
-    ) -> list[RegisteredTool]:
-        """完成一个 Server 的连接解析、工具发现、过滤和注册。
+        semaphore: asyncio.Semaphore,
+        client_class,
+    ) -> list:
+        """在并发槽位内发现一个 Server，并应用它自己的启动超时。
 
-        ``server.startup_timeout_seconds`` 只约束本方法前半段的连接与工具发现；
-        注册完成后的每次工具执行由 ``server.tool_timeout_seconds`` 单独约束。
+        等待 semaphore 的时间不计入 Server 启动超时；只有获得槽位、真正开始连接
+        后才启动 ``asyncio.wait_for`` 计时。这样并发上限不会无意中消耗排队 Server
+        的连接预算。
         """
 
-        # 配置中仍可能含 ${ENV_NAME} 和相对 cwd；直到真正连接前才解析真实值。
-        connection = resolve_mcp_connection(
-            server_name,
-            server,
-            self._config_directory,
-        )
-        # startup_timeout_seconds 是 McpServerConfig 的字段，不是方法。这里读取它
-        # 的秒数值，传给 McpAsyncBridge.run(timeout=...)，防止不可达 Server
-        # 无限阻塞应用启动。
-        tools = self._bridge.run(
-            self._discover_tools(server_name, connection),
-            timeout=server.startup_timeout_seconds,
-            operation=f"MCP Server '{server_name}' 工具发现",
-        )
+        try:
+            # 环境变量和 cwd 在各自 Task 内解析，配置错误也能按 Server 隔离报告。
+            connection = resolve_mcp_connection(
+                server_name,
+                server,
+                self._config_directory,
+            )
+            async with semaphore:
+                return await asyncio.wait_for(
+                    self._discover_tools(
+                        server_name,
+                        connection,
+                        client_class,
+                    ),
+                    timeout=server.startup_timeout_seconds,
+                )
+        except asyncio.TimeoutError as exc:
+            raise McpOperationTimeout(
+                f"MCP Server '{server_name}' 工具发现超时"
+                f"（{server.startup_timeout_seconds:g} 秒）。"
+            ) from exc
+        except McpDependencyError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f"MCP Server '{server_name}' 工具发现失败。"
+            ) from exc
+
+    def _register_server_tools(
+        self,
+        server_name: str,
+        server: McpServerConfig,
+        tools: list,
+    ) -> list[RegisteredTool]:
+        """把已经发现的一个 Server 工具转换为 HumanChat 注册项。
+
+        此方法不执行网络 I/O。它在同步线程中应用 include/exclude、配置引用校验、
+        同步调用入口和最终安全策略。
+        """
+
         # Adapter 为避免跨 Server 重名，在暴露给模型的名称前添加 Server 前缀；
         # 用户配置仍使用 Server 原始工具名，所以校验和策略匹配前需要去掉前缀。
         original_names = {
@@ -287,19 +378,11 @@ class McpToolProvider:
         self,
         server_name: str,
         connection: dict[str, Any],
+        client_class,
     ):
         """使用官方 Adapter 连接一个 Server 并获取 LangChain 工具对象。"""
 
-        # 延迟导入使 MCP 关闭时不要求加载 Adapter，也让缺少可选依赖时的错误只在
-        # 用户实际启用 MCP 后出现。
-        try:
-            from langchain_mcp_adapters.client import MultiServerMCPClient
-        except ImportError as exc:
-            raise McpDependencyError(
-                "MCP 已启用，但未安装 langchain-mcp-adapters。"
-            ) from exc
-
-        client = MultiServerMCPClient(
+        client = client_class(
             {server_name: connection},
             # 前缀从注册层根治不同 Server 返回同名工具的问题。
             tool_name_prefix=True,
@@ -308,6 +391,42 @@ class McpToolProvider:
             handle_tool_errors=True,
         )
         return await client.get_tools(server_name=server_name)
+
+    def _handle_server_failure(
+        self,
+        server_name: str,
+        error: BaseException,
+    ) -> None:
+        """根据 fail-fast 策略处理发现或注册阶段的单 Server 失败。"""
+
+        # Adapter 缺失是进程级依赖问题，跳过某一个 Server 无法恢复，因此始终
+        # 直接中止启动，不受 fail_fast 配置影响。
+        if isinstance(error, McpDependencyError):
+            raise error
+        if self._fail_fast:
+            raise RuntimeError(
+                f"MCP Server '{server_name}' 加载失败。"
+            ) from error
+        logger.error(
+            "MCP server %s failed to load and will be skipped",
+            server_name,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+    @staticmethod
+    def _discovery_batch_timeout(
+        enabled_servers: list[tuple[str, McpServerConfig]],
+    ) -> float:
+        """计算同步桥接层的批量安全超时。
+
+        每个 Task 已有独立 wait_for；这里使用所有启动超时之和作为保守上界，既能
+        覆盖并发受限时的排队批次，也不会改变正常并发完成的实际等待时间。
+        """
+
+        return (
+            sum(server.startup_timeout_seconds for _, server in enabled_servers)
+            + DISCOVERY_BATCH_GRACE_SECONDS
+        )
 
     def _add_sync_entrypoint(
         self,
@@ -425,3 +544,15 @@ def _first_defined(*values):
     """返回第一个非 None 值，用于实现策略的显式优先级。"""
 
     return next(value for value in values if value is not None)
+
+
+def _load_mcp_client_class():
+    """仅在 MCP 实际启用时加载官方 Adapter Client 类型。"""
+
+    try:
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+    except ImportError as exc:
+        raise McpDependencyError(
+            "MCP 已启用，但未安装 langchain-mcp-adapters。"
+        ) from exc
+    return MultiServerMCPClient

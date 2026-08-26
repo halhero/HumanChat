@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "max_concurrent_server_discoveries": 4,
   "servers": {
     "langchain_docs": {
       "enabled": false,

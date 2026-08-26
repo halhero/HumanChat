@@ -234,6 +234,7 @@ Each server uses the official MCP connection shape. For example:
 ```json
 {
   "version": 1,
+  "max_concurrent_server_discoveries": 4,
   "servers": {
     "docs": {
       "enabled": true,
@@ -260,6 +261,13 @@ Each server uses the official MCP connection shape. For example:
 }
 ```
 
+Enabled servers are discovered concurrently during startup. The top-level
+`max_concurrent_server_discoveries` setting limits how many network connections or `stdio`
+processes can start at once; it defaults to `4` and accepts values from `1` to `32`. Each
+server's `startup_timeout_seconds` begins after that server acquires a concurrency slot, so
+queueing does not consume its connection timeout. Discovery results are still registered in
+configuration order, keeping tool ordering and duplicate-name errors deterministic.
+
 MCP tool names are always prefixed with the server name, such as
 `docs_search_docs_by_lang_chain`. This prevents collisions between servers and makes the
 tool source visible to the model and logs.
@@ -268,10 +276,11 @@ Unknown MCP tools are treated as potentially writable and require confirmation. 
 resolved from the MCP annotation, then the server default, then a per-tool override. Tool
 arguments with credential-like keys are redacted before confirmation and debug events.
 
-With `HUMANCHAT_MCP_FAIL_FAST="false"`, an unavailable server is logged and skipped while
-healthy servers and local tools remain available. Set it to `true` when every configured MCP
-server is a required production dependency. Use `/tools` to inspect all registered local and
-MCP tools; MCP tools are Agent-only unless a CLI command is explicitly assigned in code.
+With `HUMANCHAT_MCP_FAIL_FAST="false"`, concurrent discovery collects per-server failures,
+logs and skips unavailable servers, and keeps healthy servers and local tools available. Set
+it to `true` when every configured MCP server is a required production dependency; the first
+failure then cancels unfinished discovery tasks. Use `/tools` to inspect all registered local
+and MCP tools; MCP tools are Agent-only unless a CLI command is explicitly assigned in code.
 
 ## Run
 
