@@ -23,6 +23,7 @@ HumanChat/
     mcp_config.py         # MCP server configuration and validation
     mcp_provider.py       # MCP discovery and sync/async tool adapter
     api/                  # FastAPI application, routes, and public schemas
+    application/          # Interface-neutral conversation orchestration
     runtime.py            # Conversation runtime orchestration
     session_models.py     # Typed session metadata
     session_repository.py # Session persistence contract
@@ -307,12 +308,36 @@ Configure the local frontend origins and bind address through:
 HUMANCHAT_API_HOST="127.0.0.1"
 HUMANCHAT_API_PORT="8000"
 HUMANCHAT_API_CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
+HUMANCHAT_LLM_TIMEOUT_SECONDS="60"
 ```
 
 The API uses a FastAPI lifespan to open the shared checkpointer, memory resource, tool
 registry, and compiled graph once per process. Importing `human_chat.api` does not open
 those resources; they are acquired when the ASGI application starts and released when it
 shuts down.
+
+The browser-facing conversation contract is versioned under `/api/v1`:
+
+```text
+GET  /api/v1/sessions
+POST /api/v1/sessions
+GET  /api/v1/sessions/{session_id}
+POST /api/v1/sessions/{session_id}/turns
+GET  /api/v1/turns/{turn_id}
+POST /api/v1/turns/{turn_id}/decision
+POST /api/v1/turns/{turn_id}/cancel
+```
+
+Starting or resuming a turn returns `text/event-stream`. The stream contains only public
+events such as progress, the completed assistant message, required user review, and final
+turn status. Routine tool names, arguments, and results are not exposed. A protected
+external operation includes its redacted details only when the user must understand what
+they are approving. Long requests emit heartbeat events so proxies do not treat an idle
+model call as a dead connection.
+
+The API disables server-side speaker playback. Audio in a separated web deployment belongs
+to the browser or a dedicated media endpoint; the CLI retains the existing local TTS
+behavior.
 
 The current entry point starts an interactive chat loop. Type `exit`, `quit`, `q`, or `退出` to stop.
 On startup, HumanChat lets you create a new session, continue the latest session, or choose from recent sessions.

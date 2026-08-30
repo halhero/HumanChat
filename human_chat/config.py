@@ -32,6 +32,7 @@ class Settings(BaseModel):
     openai_api_key: str = Field(default="", description="API key for the chat model provider.")
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    llm_timeout_seconds: float = Field(default=60, ge=1, le=600)
     stt_model: str = "whisper-1"
     stt_base_url: str = ""
     memory_extraction_enabled: bool = True
@@ -72,6 +73,7 @@ _ENV_OVERRIDES = (
     ("openai_api_key", "OPENAI_API_KEY", str),
     ("llm_model", "HUMANCHAT_LLM_MODEL", str),
     ("llm_base_url", "HUMANCHAT_LLM_BASE_URL", str),
+    ("llm_timeout_seconds", "HUMANCHAT_LLM_TIMEOUT_SECONDS", float),
     ("stt_model", "HUMANCHAT_STT_MODEL", str),
     ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),
     (

@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Any, Iterator
 
 from human_chat.checkpointing import CheckpointerResource, open_checkpointer
 from human_chat.config import Settings
@@ -51,7 +51,7 @@ class ChatRuntime:
             {"question": question},
             config=self.graph_config,
         )
-        self._save_runtime_state(result)
+        self._save_runtime_state(result, question=question)
         return result
 
     def resume(self, value: dict) -> dict:
@@ -64,12 +64,72 @@ class ChatRuntime:
         self._save_runtime_state(result)
         return result
 
-    def _save_runtime_state(self, result: dict) -> None:
+    def stream(
+        self,
+        question: str,
+        *,
+        control: Any | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        """Stream Graph state updates while preserving session metadata."""
+
+        yield from self._stream_graph(
+            {"question": question},
+            question=question,
+            control=control,
+        )
+
+    def resume_stream(
+        self,
+        value: dict,
+        *,
+        control: Any | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        """Resume an interrupted Graph and stream the remaining work."""
+
+        from langgraph.types import Command
+
+        yield from self._stream_graph(
+            Command(resume=value),
+            control=control,
+        )
+
+    def _stream_graph(
+        self,
+        graph_input,
+        *,
+        question: str | None = None,
+        control: Any | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        latest_state: dict = {}
+        for mode, data in self.app.stream(
+            graph_input,
+            config=self.graph_config,
+            stream_mode=["updates", "values"],
+            durability="sync",
+            control=control,
+        ):
+            if mode == "values" and isinstance(data, dict):
+                latest_state = data
+            yield mode, data
+
+        if latest_state:
+            self._save_runtime_state(latest_state, question=question)
+
+    def _save_runtime_state(
+        self,
+        result: dict,
+        *,
+        question: str | None = None,
+    ) -> None:
         self.messages = result.get("messages", self.messages)
 
         if self.persist_session:
+            title = self.session.title
+            if question and title == "新对话":
+                title = _session_title(question)
             self.session = self.session.model_copy(
                 update={
+                    "title": title,
                     "message_count": len(self.messages),
                     "updated_at": now_local(),
                     "checkpoint_backend": self.checkpoint_backend,
@@ -143,6 +203,7 @@ def open_chat_application(
     *,
     session_repository: SessionRepository | None = None,
     checkpoint_backend: str | None = None,
+    enable_server_audio: bool = True,
 ) -> Iterator[ChatApplication]:
     """Open process-scoped resources used by CLI or HTTP application lifetimes."""
 
@@ -155,6 +216,7 @@ def open_chat_application(
                     checkpoint,
                     memory,
                     tool_registry,
+                    enable_server_audio=enable_server_audio,
                 )
                 yield ChatApplication(
                     settings=settings,
@@ -196,12 +258,15 @@ def _build_runtime_graph(
     checkpoint: CheckpointerResource,
     memory: MemoryResource,
     tool_registry: ToolRegistry,
+    *,
+    enable_server_audio: bool = True,
 ):
     return build_graph(
         settings,
         checkpointer=checkpoint.saver,
         memory_service=memory.service,
         tool_registry=tool_registry,
+        enable_tts=enable_server_audio,
     )
 
 
@@ -239,3 +304,10 @@ def _synchronize_session_recovery(
     if persist_session and repository is not None:
         repository.save(updated)
     return updated
+
+
+def _session_title(question: str, max_length: int = 48) -> str:
+    normalized = " ".join(question.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[:max_length].rstrip()}..."

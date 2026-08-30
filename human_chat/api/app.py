@@ -8,8 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from human_chat import __version__
+from human_chat.application import ConversationService
 from human_chat.api.errors import install_exception_handlers
 from human_chat.api.routes.health import router as health_router
+from human_chat.api.routes.sessions import router as sessions_router
+from human_chat.api.routes.turns import router as turns_router
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import setup_logging
 from human_chat.runtime import open_chat_application
@@ -21,9 +24,17 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         setup_logging()
-        with open_chat_application(active_settings) as chat_application:
+        with open_chat_application(
+            active_settings,
+            enable_server_audio=False,
+        ) as chat_application:
             application.state.chat_application = chat_application
-            yield
+            conversation_service = ConversationService(chat_application)
+            application.state.conversation_service = conversation_service
+            try:
+                yield
+            finally:
+                await conversation_service.shutdown()
 
     application = FastAPI(
         title="HumanChat API",
@@ -37,7 +48,7 @@ def create_api(settings: Settings | None = None) -> FastAPI:
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "X-Turn-ID"],
     )
 
     @application.middleware("http")
@@ -50,6 +61,8 @@ def create_api(settings: Settings | None = None) -> FastAPI:
 
     install_exception_handlers(application)
     application.include_router(health_router, prefix="/api/v1")
+    application.include_router(sessions_router, prefix="/api/v1")
+    application.include_router(turns_router, prefix="/api/v1")
     return application
 
 
