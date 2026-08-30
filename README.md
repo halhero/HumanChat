@@ -12,15 +12,15 @@ input/playback path have been removed.
 ```text
 Frontend (next stages)
         |
-        | HTTP / event stream
+        | JSON API / Server-Sent Events
         v
 FastAPI adapter
         |
         v
-HumanChatApplication
-  - session use cases
-  - resource ownership
-  - safe status snapshot
+ConversationService       HumanChatApplication
+  - active turns            - session use cases
+  - stream/cancel/review     - resource ownership
+  - browser event protocol  - safe graph boundary
         |
         +--> LangGraph + Checkpointer
         +--> MemoryService
@@ -42,6 +42,7 @@ HumanChat/
   human_chat/
     api/                      # FastAPI factory, dependencies, routes, schemas
     application.py            # Application use cases and resource composition
+    conversation/             # Active turn state and browser event protocol
     checkpointing.py          # Managed LangGraph checkpointer
     character.py              # Character prompt model and loader
     config.py                 # Environment settings
@@ -112,6 +113,26 @@ HUMANCHAT_API_CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
 FastAPI lifespan opens the checkpointer, memory resource, MCP bridge, tool registry, and
 compiled graph once per process, then closes them in reverse order on shutdown.
 
+### Conversation API
+
+All browser endpoints are versioned under `/api/v1`:
+
+```text
+GET  /sessions                         list recent sessions
+POST /sessions                         create a session
+GET  /sessions/{session_id}            read metadata and message history
+POST /sessions/{session_id}/turns      start a turn as an SSE response
+GET  /turns/{turn_id}                  read active or retained turn status
+POST /turns/{turn_id}/decision         resume a review as an SSE response
+POST /turns/{turn_id}/cancel           request cooperative cancellation
+```
+
+Conversation streams send stable public events such as `turn.progress`,
+`message.completed`, `review.required`, `turn.completed`, `turn.cancelled`, and
+`turn.failed`. Internal graph state and routine tool-call traces are not part of the
+browser contract. The response header `X-Turn-ID` identifies the turn for status,
+review, and cancellation requests.
+
 ## Character
 
 The character file contains only behavior relevant to text conversation:
@@ -166,8 +187,9 @@ Available backends are `json`, `memory`, and `postgres`. Postgres also requires:
 HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
 ```
 
-Automatic extraction and user review remain LangGraph nodes. The Web review endpoint will
-be added with the conversation API in the next stage.
+Automatic extraction and user review remain LangGraph nodes. When confirmation is needed,
+the stream emits `review.required`; the browser can approve selected candidates through the
+turn decision endpoint and LangGraph resumes from its checkpoint.
 
 ## Tools And MCP
 
@@ -196,9 +218,10 @@ Completed:
 
 1. FastAPI process foundation and managed application lifespan.
 2. Application-owned resources and removal of the obsolete CLI/audio execution path.
+3. Session/history APIs, SSE conversation turns, cooperative cancellation, and LangGraph
+   interrupt review.
 
 Next:
 
-1. Versioned session and conversation APIs.
-2. Event-streamed replies, cancellation, and Graph interrupt review.
-3. A small React frontend for the basic chat workflow.
+1. A small React frontend for the basic chat workflow.
+2. Integrated development and production startup paths.

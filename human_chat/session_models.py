@@ -15,6 +15,7 @@ def now_local() -> datetime:
 class SessionRecord(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     thread_id: str = ""
+    title: str = "新对话"
     created_at: datetime = Field(default_factory=now_local)
     updated_at: datetime = Field(default_factory=now_local)
     message_count: int = Field(default=0, ge=0)

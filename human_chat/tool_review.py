@@ -51,7 +51,7 @@ def create_tool_review_request(
     """根据注册表元数据构建脱敏后的审批请求。
 
     来源和安全属性以注册表为准，不信任模型在 tool call 中自行提供的描述；参数在
-    进入可展示模型前递归脱敏，防止 CLI、debug 输出或 checkpoint 泄露凭据。
+    进入可展示模型前递归脱敏，防止 API、日志或 checkpoint 泄露凭据。
     """
 
     calls = []

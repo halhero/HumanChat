@@ -1,6 +1,6 @@
 """把远程 MCP 工具适配为 HumanChat 的统一工具注册项。
 
-LangChain MCP Adapter 原生提供异步工具，而当前 HumanChat 的 CLI 和 LangGraph
+LangChain MCP Adapter 原生提供异步工具，而当前 HumanChat 的 LangGraph ToolNode
 执行路径以同步调用为主。本模块同时承担两项边界职责：
 
 * 发现 MCP 工具，并转换成带来源和安全策略的 ``RegisteredTool``；

@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from human_chat.application import HumanChatApplication
+from human_chat.conversation import ConversationService
 
 
 def get_human_chat_application(request: Request) -> HumanChatApplication:
@@ -17,4 +18,17 @@ def get_human_chat_application(request: Request) -> HumanChatApplication:
 HumanChatApplicationDependency = Annotated[
     HumanChatApplication,
     Depends(get_human_chat_application),
+]
+
+
+def get_conversation_service(request: Request) -> ConversationService:
+    service = getattr(request.app.state, "conversation_service", None)
+    if service is None:
+        raise RuntimeError("Conversation service is not ready.")
+    return service
+
+
+ConversationServiceDependency = Annotated[
+    ConversationService,
+    Depends(get_conversation_service),
 ]

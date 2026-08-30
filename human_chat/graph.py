@@ -186,7 +186,7 @@ def build_graph(
             tool_calls,
             active_tool_registry,
         )
-        # interrupt 会把状态持久化到 checkpointer，并把审批请求交还 CLI。恢复时
+        # interrupt 会把状态持久化到 checkpointer，并把审批请求交还接口层。恢复时
         # Command(resume=...) 的值会成为这里的返回值，然后 Graph 从本节点继续。
         decision_data = interrupt(
             {
@@ -364,7 +364,7 @@ def build_graph(
             "finalize_reply": "finalize_reply",
         },
     )
-    # 工具审批是 Graph 的一等节点，而不是 CLI 在 Graph 外自行调用工具。这样暂停、
+    # 工具审批是 Graph 的一等节点，而不是接口层在 Graph 外自行调用工具。这样暂停、
     # 恢复和 checkpoint 都保持在 LangGraph 的状态机语义内。
     workflow.add_conditional_edges(
         "review_tool_calls",

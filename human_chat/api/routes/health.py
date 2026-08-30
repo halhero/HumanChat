@@ -19,6 +19,7 @@ def get_health(application: HumanChatApplicationDependency) -> HealthResponse:
             checkpoint_backend=status.checkpoint_backend,
             checkpoint_persistent=status.checkpoint_persistent,
             memory_backend=status.memory_backend,
+            memory_persistent=status.memory_persistent,
             mcp_enabled=status.mcp_enabled,
             registered_tool_count=status.registered_tool_count,
         ),

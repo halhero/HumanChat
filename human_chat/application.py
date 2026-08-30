@@ -2,8 +2,10 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator, Literal
 
+from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.runtime import RunControl
 from langgraph.types import Command
 
 from human_chat.checkpointing import CheckpointerResource, open_checkpointer
@@ -31,6 +33,15 @@ class ApplicationStatus:
     memory_persistent: bool
     mcp_enabled: bool
     registered_tool_count: int
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """Framework-neutral message returned to interface adapters."""
+
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
 
 
 class HumanChatApplication:
@@ -82,38 +93,110 @@ class HumanChatApplication:
             for session in self._sessions.list_recent(limit=limit)
         ]
 
-    def run_turn(self, session_id: str, question: str) -> dict:
+    def get_session_with_messages(
+        self,
+        session_id: str,
+    ) -> tuple[SessionRecord, list[ChatMessage]]:
         session = self.get_session(session_id)
-        result = self._graph.invoke(
-            {"question": question},
-            config=self._graph_config(session.thread_id),
-        )
-        self._save_session_state(session, result)
-        return result
-
-    def resume_turn(self, session_id: str, value: dict) -> dict:
-        session = self.get_session(session_id)
-        result = self._graph.invoke(
-            Command(resume=value),
-            config=self._graph_config(session.thread_id),
-        )
-        self._save_session_state(session, result)
-        return result
-
-    def get_graph_state(self, session_id: str):
-        session = self.get_session(session_id)
-        return self._graph.get_state(
+        snapshot = self._graph.get_state(
             self._graph_config(session.thread_id)
+        )
+        messages = snapshot.values.get("messages", []) if snapshot.values else []
+        public_messages = []
+        for index, message in enumerate(messages):
+            if isinstance(message, HumanMessage):
+                role = "user"
+            elif isinstance(message, AIMessage):
+                role = "assistant"
+            else:
+                continue
+            content = _message_text(message)
+            if content:
+                public_messages.append(
+                    ChatMessage(
+                        id=getattr(message, "id", None)
+                        or f"{session.id}-{index}",
+                        role=role,
+                        content=content,
+                    )
+                )
+        return session, public_messages
+
+    def stream_turn(
+        self,
+        session_id: str,
+        question: str,
+        *,
+        control: RunControl,
+    ) -> Iterator[tuple[str, Any]]:
+        session = self.get_session(session_id)
+        yield from self._stream_graph(
+            session,
+            {"question": question},
+            control=control,
+            question=question,
+        )
+
+    def resume_turn(
+        self,
+        session_id: str,
+        value: dict,
+        *,
+        control: RunControl,
+    ) -> Iterator[tuple[str, Any]]:
+        session = self.get_session(session_id)
+        yield from self._stream_graph(
+            session,
+            Command(resume=value),
+            control=control,
         )
 
     @staticmethod
     def _graph_config(thread_id: str) -> dict:
         return {"configurable": {"thread_id": thread_id}}
 
-    def _save_session_state(self, session: SessionRecord, result: dict) -> None:
+    def _stream_graph(
+        self,
+        session: SessionRecord,
+        graph_input,
+        *,
+        control: RunControl,
+        question: str | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        latest_state: dict = {}
+        try:
+            for mode, data in self._graph.stream(
+                graph_input,
+                config=self._graph_config(session.thread_id),
+                stream_mode=["updates", "values"],
+                durability="sync",
+                control=control,
+            ):
+                if mode == "values" and isinstance(data, dict):
+                    latest_state = data
+                yield mode, data
+        finally:
+            if latest_state:
+                self._save_session_state(
+                    session,
+                    latest_state,
+                    question=question,
+                )
+
+    def _save_session_state(
+        self,
+        session: SessionRecord,
+        result: dict,
+        *,
+        question: str | None = None,
+    ) -> None:
         messages = result.get("messages", [])
+        title = session.title
+        if question and title == "新对话":
+            title = _session_title(question)
         updated = session.model_copy(
             update={
+                "title": title,
                 "message_count": len(messages),
                 "updated_at": now_local(),
                 "checkpoint_backend": self._checkpoint.backend,
@@ -175,3 +258,28 @@ def open_human_chat_application(
                     memory=memory,
                     tool_registry=tool_registry,
                 )
+
+
+def _message_text(message) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return str(content).strip()
+
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict) and block.get("text") is not None:
+            parts.append(str(block["text"]))
+        elif getattr(block, "text", None) is not None:
+            parts.append(str(block.text))
+    return "".join(parts).strip()
+
+
+def _session_title(question: str, max_length: int = 48) -> str:
+    normalized = " ".join(question.split())
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[:max_length].rstrip()}..."

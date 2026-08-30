@@ -11,7 +11,10 @@ from human_chat import __version__
 from human_chat.application import open_human_chat_application
 from human_chat.api.errors import install_exception_handlers
 from human_chat.api.routes.health import router as health_router
+from human_chat.api.routes.sessions import router as sessions_router
+from human_chat.api.routes.turns import router as turns_router
 from human_chat.config import Settings, load_settings
+from human_chat.conversation import ConversationService
 from human_chat.logging_config import setup_logging
 
 
@@ -23,7 +26,12 @@ def create_api(settings: Settings | None = None) -> FastAPI:
         setup_logging()
         with open_human_chat_application(active_settings) as human_chat:
             application.state.human_chat_application = human_chat
-            yield
+            conversations = ConversationService(human_chat)
+            application.state.conversation_service = conversations
+            try:
+                yield
+            finally:
+                await conversations.shutdown()
 
     application = FastAPI(
         title="HumanChat API",
@@ -37,7 +45,7 @@ def create_api(settings: Settings | None = None) -> FastAPI:
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-Request-ID"],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "X-Turn-ID"],
     )
 
     @application.middleware("http")
@@ -50,6 +58,8 @@ def create_api(settings: Settings | None = None) -> FastAPI:
 
     install_exception_handlers(application)
     application.include_router(health_router, prefix="/api/v1")
+    application.include_router(sessions_router, prefix="/api/v1")
+    application.include_router(turns_router, prefix="/api/v1")
     return application
 
 
