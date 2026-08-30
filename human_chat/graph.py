@@ -22,7 +22,6 @@ from human_chat.tool_review import (
     redact_tool_arguments,
     tool_calls_require_confirmation,
 )
-from human_chat.tts import TtsClient, TtsError
 
 
 logger = get_logger(__name__)
@@ -134,7 +133,6 @@ def build_graph(
     project_tools = active_tool_registry.get_tools()
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
-    tts_client = TtsClient(settings, character)
 
     def prepare_context(state: ChatState):
         # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
@@ -264,20 +262,11 @@ def build_graph(
         logger.info("Generated assistant reply")
         return {
             "assistant_text": assistant_text,
-            "tts_error": "",
             "messages": [
                 HumanMessage(content=state.question),
                 AIMessage(content=assistant_text),
             ],
         }
-
-    def synthesize_speech(state: ChatState):
-        try:
-            tts_client.synthesize_and_play(state.assistant_text)
-        except TtsError as exc:
-            logger.warning("TTS failed: %s", exc)
-            return {"tts_error": str(exc)}
-        return {"tts_error": ""}
 
     def extract_memory(state: ChatState):
         if not settings.memory_extraction_enabled or not state.assistant_text:
@@ -362,7 +351,6 @@ def build_graph(
     workflow.add_node("finalize_reply", finalize_reply)
     workflow.add_node("extract_memory", extract_memory)
     workflow.add_node("review_memory", review_memory)
-    workflow.add_node("synthesize_speech", synthesize_speech)
     workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
     workflow.add_edge(START, "prepare_context")
     workflow.add_edge("prepare_context", "call_agent_model")
@@ -390,8 +378,7 @@ def build_graph(
     workflow.add_edge("reject_tool_calls", "call_agent_model")
     workflow.add_edge("mark_tool_limit_reached", "generate_limit_reply")
     workflow.add_edge("generate_limit_reply", "finalize_reply")
-    workflow.add_edge("finalize_reply", "synthesize_speech")
-    workflow.add_edge("synthesize_speech", "extract_memory")
+    workflow.add_edge("finalize_reply", "extract_memory")
     workflow.add_edge("extract_memory", "review_memory")
     workflow.add_edge("review_memory", END)
     return workflow.compile(checkpointer=checkpointer)

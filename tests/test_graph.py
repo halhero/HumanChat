@@ -29,14 +29,6 @@ class FakeMemoryService:
         return True
 
 
-class SilentTtsClient:
-    def __init__(self, settings, character):
-        pass
-
-    def synthesize_and_play(self, text: str) -> None:
-        pass
-
-
 @tool("lookup_context")
 def lookup_context(value: str) -> str:
     """Return test project context."""
@@ -45,7 +37,6 @@ def lookup_context(value: str) -> str:
 
 def _build_test_graph(monkeypatch, model, registry=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
-    monkeypatch.setattr(graph_module, "TtsClient", SilentTtsClient)
     return graph_module.build_graph(
         Settings(memory_extraction_enabled=False),
         memory_service=FakeMemoryService(),

@@ -8,11 +8,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from human_chat import __version__
+from human_chat.application import open_human_chat_application
 from human_chat.api.errors import install_exception_handlers
 from human_chat.api.routes.health import router as health_router
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import setup_logging
-from human_chat.runtime import open_chat_application
 
 
 def create_api(settings: Settings | None = None) -> FastAPI:
@@ -21,8 +21,8 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         setup_logging()
-        with open_chat_application(active_settings) as chat_application:
-            application.state.chat_application = chat_application
+        with open_human_chat_application(active_settings) as human_chat:
+            application.state.human_chat_application = human_chat
             yield
 
     application = FastAPI(

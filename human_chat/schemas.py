@@ -19,4 +19,3 @@ class ChatState(BaseModel):
     memory_saved_count: int = 0
     memory_prompt: str = ""
     assistant_text: str = ""
-    tts_error: str = ""

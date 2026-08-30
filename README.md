@@ -1,307 +1,107 @@
 # HumanChat
 
-HumanChat is an early-stage chat agent project that connects a chat model, a LangGraph workflow, and a local GPT-SoVITS TTS service.
+HumanChat is a Web-oriented chat Agent built with FastAPI, LangGraph, LangChain,
+long-term memory, managed checkpoints, local tools, and optional MCP servers.
+
+The project is being migrated to a separated frontend/backend architecture. The Python
+process is now the backend application only; the former interactive CLI and local audio
+input/playback path have been removed.
+
+## Architecture
+
+```text
+Frontend (next stages)
+        |
+        | HTTP / event stream
+        v
+FastAPI adapter
+        |
+        v
+HumanChatApplication
+  - session use cases
+  - resource ownership
+  - safe status snapshot
+        |
+        +--> LangGraph + Checkpointer
+        +--> MemoryService
+        +--> ToolRegistry
+                 +--> local tools
+                 +--> MCP tools
+```
+
+`HumanChatApplication` is the backend boundary. FastAPI does not access repositories,
+checkpointers, memory stores, or tool providers directly.
 
 ## Project Structure
 
 ```text
 HumanChat/
-  main.py                 # Minimal entry point
-  characters/
-    nanami.yaml           # Default character profile
+  characters/                 # Character prompts
+  config/                     # MCP configuration example
+  data/                       # Local runtime data
   human_chat/
-    character.py          # Character profile loading and validation
-    audio_recorder.py     # Microphone recording helper
-    checkpointing.py      # Managed LangGraph checkpointer resources
-    config.py             # Environment-based settings
-    input_provider.py     # Text and audio-file input providers
-    logging_config.py     # Logging setup helpers
-    llm.py                # Chat model factory
-    memory_models.py      # Long-term memory data models
-    memory_repository.py  # JSON and LangGraph Store persistence adapters
-    memory_service.py     # Long-term memory business rules
-    mcp_config.py         # MCP server configuration and validation
-    mcp_provider.py       # MCP discovery and sync/async tool adapter
-    api/                  # FastAPI application, routes, and public schemas
-    runtime.py            # Conversation runtime orchestration
-    session_models.py     # Typed session metadata
-    session_repository.py # Session persistence contract
-    schemas.py            # Graph state schema
-    stt.py                # Speech-to-text helpers
-    storage/              # Storage composition and JSON repositories
-    tool_provider.py      # Provider loading and shared ToolRegistry
-    tool_resources.py     # Managed local and MCP tool resources
-    tool_review.py        # Tool confirmation requests and redaction
-    tools.py              # Safe local project tools
-    tts.py                # GPT-SoVITS HTTP client and service helpers
-    graph.py              # LangGraph workflow
-    cli/                  # CLI app, commands, interrupts, and debug views
-  speech/
-    tmp.wav               # Generated speech output
-  data/
-    memory/               # Long-term memory templates and local memory
-    sessions/             # Saved chat sessions
-  config/
-    mcp_servers.example.json # Safe MCP configuration example
+    api/                      # FastAPI factory, dependencies, routes, schemas
+    application.py            # Application use cases and resource composition
+    checkpointing.py          # Managed LangGraph checkpointer
+    character.py              # Character prompt model and loader
+    config.py                 # Environment settings
+    graph.py                  # LangGraph Agent workflow
+    memory_*.py               # Long-term memory domain and persistence
+    mcp_*.py                  # MCP configuration and providers
+    session_*.py              # Session model and repository contract
+    storage/                  # Persistence composition
+    tool_*.py / tools.py      # Tool registry, policies, and local tools
+  tests/                      # Current backend regression tests
+  资料/                       # Design and change records
 ```
 
 ## Setup
 
-Install dependencies in your project environment:
+Install dependencies:
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-For development and tests:
+For development checks:
 
 ```powershell
 pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Create your local `.env` from `.env.example`, then fill in the real values:
+Create local settings:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Required:
+Set at least the model API key:
 
 ```env
 OPENAI_API_KEY="your_api_key_here"
 ```
 
-If your GPT-SoVITS service is already running at `http://127.0.0.1:9880`, keep:
+The default model endpoint is OpenAI-compatible and can be changed with:
 
 ```env
-HUMANCHAT_TTS_AUTO_START="false"
+HUMANCHAT_LLM_MODEL="qwen3.5-flash"
+HUMANCHAT_LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 ```
 
-If you want HumanChat to start GPT-SoVITS automatically, set:
-
-```env
-HUMANCHAT_TTS_AUTO_START="true"
-GPT_SOVITS_DIR="path/to/GPT-SoVITS"
-GPT_SOVITS_PYTHON="path/to/python.exe"
-```
-
-## Characters
-
-Characters are stored as YAML files in `characters/`.
-The default character is `characters/nanami.yaml`.
-
-A character controls the assistant prompt and TTS voice settings:
-
-```yaml
-id: nanami
-name: 七海
-reply_language: ja
-system_prompt: |
-  你是一个聊天助手，请你根据用户的问题以及提供的上下文给出适当的回复。
-  你的回复应该自然、简短，并使用日语。
-tts:
-  ref_audio_path: path/to/ref.wav
-  prompt_text: でも、怪しい人の手がかりならある。
-  prompt_lang: ja
-  text_lang: ja
-  split_method: cut5
-  speed_factor: 1.0
-```
-
-Character identity and voice synthesis parameters come from this YAML file. Environment
-settings only control the TTS service endpoint, optional service startup, and deployment
-paths, so the same voice parameter does not have two competing configuration sources.
-
-Switch characters by setting:
-
-```env
-HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
-```
-
-## Long-Term Memory
-
-Long-term memory stores stable user and project information across sessions.
-The default memory path is:
-
-```env
-HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
-HUMANCHAT_MEMORY_USER_ID="default"
-HUMANCHAT_MEMORY_BACKEND="json"
-```
-
-If the file does not exist, HumanChat creates it from the built-in default memory.
-Real memory files are ignored by Git; use `data/memory/user_profile.example.json` as a template.
-The default user keeps using `user_profile.json`. Other `HUMANCHAT_MEMORY_USER_ID` values are stored in separate JSON files derived from the same base path.
-
-Long-term memory is injected into the system prompt together with the selected character profile.
-The graph reads long-term memory on each chat turn, so `/memory add` and `/memory delete` can affect later replies without restarting the app.
-
-The memory module follows a one-way dependency structure:
-
-```text
-Graph / CLI -> MemoryService -> MemoryRepository -> JSON or LangGraph Store
-                                      |
-                                  MemoryModel
-```
-
-`MemoryService` owns validation, deduplication, deletion, and prompt formatting.
-`MemoryRepository` owns persistence, while the model classes contain no file or business operations.
-Repository operations are item-based: each `MemoryItem.id` is the stable persistence key, including when a LangGraph Store adapter is used.
-
-Available memory backends are `json` for local persistence, `memory` for LangGraph Store development/testing, and `postgres` for a persistent LangGraph PostgresStore. Postgres mode also requires:
-
-```env
-HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
-```
-
-During chat, manage long-term memory with:
-
-```text
-/memory
-/memory add 用户希望先看设计再改代码
-/memory delete 1
-```
-
-When enabled, HumanChat also proposes long-term memory candidates after each normal chat turn and asks for confirmation before saving:
-
-```env
-HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
-```
-
-The graph raises a structured memory review interrupt, and the CLI resumes the graph with an explicit user decision before long-term memory is written.
-
-## Short-Term Memory
-
-Short-term conversation state is managed by the LangGraph checkpointer with the active session id as `thread_id`.
-By default HumanChat uses:
-
-```env
-HUMANCHAT_CHECKPOINT_BACKEND="sqlite"
-HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK="false"
-HUMANCHAT_CHECKPOINT_PATH="data/checkpoints/langgraph.sqlite"
-```
-
-When `langgraph-checkpoint-sqlite` is installed, this SQLite checkpoint file lets chat state survive process restarts.
-If the SQLite package is unavailable, HumanChat fails explicitly by default. Set `HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK="true"` only when a non-persistent development fallback is acceptable.
-Checkpointer connections are owned by the runtime context and are closed when the chat exits.
-
-## Project Tools
-
-HumanChat includes safe, read-only project tools exposed through the shared tool provider.
-The agent graph and the CLI commands use the same tool source:
-
-```text
-/tools
-/files
-/read human_chat/graph.py
-/search memory
-```
-
-These tools are limited to files inside the project directory.
-The agent graph can decide to call these read-only tools before generating a reply when a question requires project context.
-The tool-capable model and ToolNode share one conversation chain; when no more tools are
-needed, the latest model message becomes the final reply instead of being discarded and
-generated a second time.
-In chat, `/tools` shows the currently registered tool metadata, including source, safety level, and usage.
-Providers load `RegisteredTool` entries once at runtime; a shared `ToolRegistry` validates names and commands, then serves the same LangChain tools to both the Graph and CLI.
-
-## MCP Tools
-
-HumanChat can load tools from multiple MCP servers through the official
-`langchain-mcp-adapters` package. MCP is disabled by default, so local chat and project
-tools do not depend on external servers.
-
-Create a local configuration from the tracked example:
-
-```powershell
-Copy-Item config/mcp_servers.example.json config/mcp_servers.json
-```
-
-Enable the servers you want inside `config/mcp_servers.json`, then enable MCP:
-
-```env
-HUMANCHAT_MCP_ENABLED="true"
-HUMANCHAT_MCP_CONFIG_PATH="config/mcp_servers.json"
-HUMANCHAT_MCP_FAIL_FAST="false"
-```
-
-The real configuration file is ignored by Git. Connection values can reference secrets or
-machine-specific paths with `${VARIABLE_NAME}`; the referenced value must exist in the
-process environment.
-
-Each server uses the official MCP connection shape. For example:
-
-```json
-{
-  "version": 1,
-  "max_concurrent_server_discoveries": 4,
-  "servers": {
-    "docs": {
-      "enabled": true,
-      "connection": {
-        "transport": "http",
-        "url": "https://docs.langchain.com/mcp"
-      },
-      "include_tools": [],
-      "exclude_tools": [],
-      "default_policy": {
-        "read_only": false,
-        "requires_confirmation": true
-      },
-      "tool_policies": {
-        "search_docs_by_lang_chain": {
-          "read_only": true,
-          "requires_confirmation": false
-        }
-      },
-      "startup_timeout_seconds": 15,
-      "tool_timeout_seconds": 60
-    }
-  }
-}
-```
-
-Enabled servers are discovered concurrently during startup. The top-level
-`max_concurrent_server_discoveries` setting limits how many network connections or `stdio`
-processes can start at once; it defaults to `4` and accepts values from `1` to `32`. Each
-server's `startup_timeout_seconds` begins after that server acquires a concurrency slot, so
-queueing does not consume its connection timeout. Discovery results are still registered in
-configuration order, keeping tool ordering and duplicate-name errors deterministic.
-
-MCP tool names are always prefixed with the server name, such as
-`docs_search_docs_by_lang_chain`. This prevents collisions between servers and makes the
-tool source visible to the model and logs.
-
-Unknown MCP tools are treated as potentially writable and require confirmation. Policy is
-resolved from the MCP annotation, then the server default, then a per-tool override. Tool
-arguments with credential-like keys are redacted before confirmation and debug events.
-
-With `HUMANCHAT_MCP_FAIL_FAST="false"`, concurrent discovery collects per-server failures,
-logs and skips unavailable servers, and keeps healthy servers and local tools available. Set
-it to `true` when every configured MCP server is a required production dependency; the first
-failure then cancels unfinished discovery tasks. Use `/tools` to inspect all registered local
-and MCP tools; MCP tools are Agent-only unless a CLI command is explicitly assigned in code.
-
-## Run
-
-```powershell
-python main.py
-```
-
-Run the versioned backend API separately with:
+## Run Backend
 
 ```powershell
 python -m human_chat.api
 ```
 
-The API binds to `127.0.0.1:8000` by default. Its readiness endpoint is:
+The default address is `http://127.0.0.1:8000`. Readiness endpoint:
 
 ```text
 GET http://127.0.0.1:8000/api/v1/health
 ```
 
-Configure the local frontend origins and bind address through:
+Backend bind and allowed frontend origins are configurable:
 
 ```env
 HUMANCHAT_API_HOST="127.0.0.1"
@@ -309,57 +109,96 @@ HUMANCHAT_API_PORT="8000"
 HUMANCHAT_API_CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
 ```
 
-The API uses a FastAPI lifespan to open the shared checkpointer, memory resource, tool
-registry, and compiled graph once per process. Importing `human_chat.api` does not open
-those resources; they are acquired when the ASGI application starts and released when it
-shuts down.
+FastAPI lifespan opens the checkpointer, memory resource, MCP bridge, tool registry, and
+compiled graph once per process, then closes them in reverse order on shutdown.
 
-The current entry point starts an interactive chat loop. Type `exit`, `quit`, `q`, or `退出` to stop.
-On startup, HumanChat lets you create a new session, continue the latest session, or choose from recent sessions.
-Session files are stored in `data/sessions/*.json` by default.
+## Character
 
-If the TTS service fails, HumanChat will keep the text reply and print a speech error instead of exiting the whole chat loop.
+The character file contains only behavior relevant to text conversation:
 
-You can change the session directory with:
+```yaml
+id: nanami
+name: 七海
+reply_language: ja
+system_prompt: |
+  你是一个聊天助手，请你根据用户的问题以及提供的上下文给出适当的回复。
+```
+
+Select another character prompt with:
 
 ```env
+HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
+```
+
+## Conversation State
+
+Short-term conversation state is owned by the LangGraph checkpointer. The session id is
+used as the Graph `thread_id`.
+
+```env
+HUMANCHAT_CHECKPOINT_BACKEND="sqlite"
+HUMANCHAT_CHECKPOINT_ALLOW_MEMORY_FALLBACK="false"
+HUMANCHAT_CHECKPOINT_PATH="data/checkpoints/langgraph.sqlite"
 HUMANCHAT_SESSION_DIR="data/sessions"
 ```
 
-## Voice Input
+SQLite is persistent across backend restarts. Memory fallback is opt-in because it cannot
+recover a conversation after process exit.
 
-HumanChat supports audio-file input and a first microphone input mode.
-On startup, choose `音频文件输入` or `麦克风输入`. The recognized text is sent through the same chat runtime as normal text input.
+## Long-Term Memory
 
-Switch input mode during a chat:
-
-```text
-/input text
-/input audio-file
-/input mic
-```
-
-Enable lightweight graph debugging during a chat:
+Long-term memory follows this dependency direction:
 
 ```text
-/debug on
-/debug off
+Graph -> MemoryService -> MemoryRepository -> JSON / LangGraph Store
 ```
-
-Debug mode prints the returned graph state summary after each chat turn.
-
-Configure STT with:
 
 ```env
-HUMANCHAT_STT_MODEL="whisper-1"
-HUMANCHAT_STT_BASE_URL=""
-HUMANCHAT_MIC_RECORD_SECONDS="5"
-HUMANCHAT_MIC_SAMPLE_RATE="16000"
+HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
+HUMANCHAT_MEMORY_USER_ID="default"
+HUMANCHAT_MEMORY_BACKEND="json"
+HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
 ```
 
-## Next Milestones
+Available backends are `json`, `memory`, and `postgres`. Postgres also requires:
 
-1. Expand automated tests to runtime and graph behavior with mocked models.
-2. Add SQLite-backed storage adapters.
-3. Improve automatic memory extraction quality and review UX.
-4. Build a simple UI after the core runtime is stable.
+```env
+HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
+```
+
+Automatic extraction and user review remain LangGraph nodes. The Web review endpoint will
+be added with the conversation API in the next stage.
+
+## Tools And MCP
+
+The Graph receives all tools from one `ToolRegistry`. Local project tools are available by
+default; optional MCP tools use the same registration and safety policy model.
+
+Enable MCP after copying the example configuration:
+
+```powershell
+Copy-Item config/mcp_servers.example.json config/mcp_servers.json
+```
+
+```env
+HUMANCHAT_MCP_ENABLED="true"
+HUMANCHAT_MCP_CONFIG_PATH="config/mcp_servers.json"
+HUMANCHAT_MCP_FAIL_FAST="false"
+```
+
+Enabled MCP servers are discovered concurrently. Tool names are prefixed with the server
+name, sensitive arguments are redacted for review, and tools marked as potentially writable
+must be explicitly approved before LangGraph executes them.
+
+## Current Migration State
+
+Completed:
+
+1. FastAPI process foundation and managed application lifespan.
+2. Application-owned resources and removal of the obsolete CLI/audio execution path.
+
+Next:
+
+1. Versioned session and conversation APIs.
+2. Event-streamed replies, cancellation, and Graph interrupt review.
+3. A small React frontend for the basic chat workflow.
