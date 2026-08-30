@@ -124,7 +124,6 @@ def build_graph(
     memory_service: MemoryService,
     checkpointer=None,
     tool_registry: ToolRegistry | None = None,
-    enable_tts: bool = True,
 ):
     settings = settings or load_settings()
     character = load_character(settings.character_path)
@@ -273,8 +272,6 @@ def build_graph(
         }
 
     def synthesize_speech(state: ChatState):
-        if not enable_tts:
-            return {"tts_error": ""}
         try:
             tts_client.synthesize_and_play(state.assistant_text)
         except TtsError as exc:

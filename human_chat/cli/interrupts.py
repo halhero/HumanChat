@@ -5,7 +5,6 @@ from human_chat.memory_review import (
     MemoryReviewRequest,
     parse_memory_review_request,
 )
-from human_chat.graph_interrupts import extract_interrupt_payloads
 from human_chat.runtime import ChatRuntime
 from human_chat.tool_review import (
     ToolReviewDecision,
@@ -63,6 +62,23 @@ def _prompt_interrupt_decision(payload):
 
     print("收到暂不支持的 Graph interrupt，已跳过。")
     return None
+
+
+def extract_interrupt_payloads(result: dict) -> list:
+    """兼容 LangGraph Interrupt 对象和序列化后的字典表示。"""
+
+    interrupts = result.get("__interrupt__") or []
+    if not isinstance(interrupts, (list, tuple)):
+        interrupts = [interrupts]
+
+    payloads = []
+    for item in interrupts:
+        value = getattr(item, "value", None)
+        if value is None and isinstance(item, dict):
+            value = item.get("value", item)
+        if value is not None:
+            payloads.append(value)
+    return payloads
 
 
 def prompt_memory_review_decision(
