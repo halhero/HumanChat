@@ -128,10 +128,20 @@ Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend at
 `http://127.0.0.1:8000`, so the backend should be running at the same time. A different
 API prefix can be supplied with `VITE_API_BASE_URL`.
 
-Production frontend assets can be checked with:
+Build the production frontend, then start only FastAPI:
 
 ```powershell
 pnpm build
+Set-Location ..
+python -m human_chat.api
+```
+
+The complete application is then available at `http://127.0.0.1:8000`. Hashed Vite
+assets receive long-lived cache headers, while `index.html` is never cached. Override the
+build directory only when deployment uses a different layout:
+
+```env
+HUMANCHAT_FRONTEND_DIST_PATH="web/dist"
 ```
 
 ### Conversation API
@@ -246,5 +256,5 @@ Completed:
 
 Next:
 
-1. Integrated development and production startup paths.
-2. FastAPI delivery of the production frontend build.
+1. Authentication and multi-user isolation when the project starts serving multiple users.
+2. Broader automated coverage and deployment automation as the product surface grows.

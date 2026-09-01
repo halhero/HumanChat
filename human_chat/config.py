@@ -43,6 +43,7 @@ class Settings(BaseModel):
             "http://localhost:5173",
         ]
     )
+    frontend_dist_path: Path = PROJECT_ROOT / "web" / "dist"
 
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
     memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
@@ -83,6 +84,7 @@ _ENV_OVERRIDES = (
             if origin.strip()
         ],
     ),
+    ("frontend_dist_path", "HUMANCHAT_FRONTEND_DIST_PATH", _parse_path),
     ("character_path", "HUMANCHAT_CHARACTER_PATH", _parse_path),
     ("memory_path", "HUMANCHAT_MEMORY_PATH", _parse_path),
     ("checkpoint_path", "HUMANCHAT_CHECKPOINT_PATH", _parse_path),
