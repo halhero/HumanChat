@@ -4,8 +4,12 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo
 speech/tmp.wav
 data/sessions/*.json
+data/checkpoints/*.sqlite*
 data/memory/*.json
 !data/memory/*.example.json
 config/mcp_servers.json

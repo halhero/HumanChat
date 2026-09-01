@@ -10,7 +10,7 @@ input/playback path have been removed.
 ## Architecture
 
 ```text
-Frontend (next stages)
+React + TypeScript frontend
         |
         | JSON API / Server-Sent Events
         v
@@ -52,6 +52,7 @@ HumanChat/
     session_*.py              # Session model and repository contract
     storage/                  # Persistence composition
     tool_*.py / tools.py      # Tool registry, policies, and local tools
+  web/                        # React, TypeScript, Vite frontend
   tests/                      # Current backend regression tests
   资料/                       # Design and change records
 ```
@@ -112,6 +113,26 @@ HUMANCHAT_API_CORS_ORIGINS="http://127.0.0.1:5173,http://localhost:5173"
 
 FastAPI lifespan opens the checkpointer, memory resource, MCP bridge, tool registry, and
 compiled graph once per process, then closes them in reverse order on shutdown.
+
+## Run Frontend
+
+Use Node.js `20.19+` or `22.12+`, then install and start the Vite development server:
+
+```powershell
+Set-Location web
+pnpm install
+pnpm dev
+```
+
+Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend at
+`http://127.0.0.1:8000`, so the backend should be running at the same time. A different
+API prefix can be supplied with `VITE_API_BASE_URL`.
+
+Production frontend assets can be checked with:
+
+```powershell
+pnpm build
+```
 
 ### Conversation API
 
@@ -220,8 +241,10 @@ Completed:
 2. Application-owned resources and removal of the obsolete CLI/audio execution path.
 3. Session/history APIs, SSE conversation turns, cooperative cancellation, and LangGraph
    interrupt review.
+4. A compact React frontend with session navigation, streaming replies, cancellation,
+   review dialogs, and responsive mobile layout.
 
 Next:
 
-1. A small React frontend for the basic chat workflow.
-2. Integrated development and production startup paths.
+1. Integrated development and production startup paths.
+2. FastAPI delivery of the production frontend build.
