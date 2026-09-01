@@ -9,6 +9,7 @@ from langgraph.runtime import RunControl
 from langgraph.types import Command
 
 from human_chat.checkpointing import CheckpointerResource, open_checkpointer
+from human_chat.character import load_character
 from human_chat.config import Settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
@@ -18,6 +19,13 @@ from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
 from human_chat.tool_provider import ToolRegistry
 from human_chat.tool_resources import open_tool_registry
+from human_chat.voice import (
+    SpeechRecognitionError,
+    SpeechSynthesisError,
+    SynthesizedAudio,
+    VoiceResource,
+    open_voice_resource,
+)
 
 
 logger = get_logger(__name__)
@@ -33,6 +41,18 @@ class ApplicationStatus:
     memory_persistent: bool
     mcp_enabled: bool
     registered_tool_count: int
+    stt_enabled: bool
+    tts_enabled: bool
+
+
+@dataclass(frozen=True)
+class VoiceCapabilities:
+    """Public voice capability state without exposing provider clients."""
+
+    stt_enabled: bool
+    tts_enabled: bool
+    tts_available: bool
+    tts_auto_start: bool
 
 
 @dataclass(frozen=True)
@@ -60,6 +80,7 @@ class HumanChatApplication:
         checkpoint: CheckpointerResource,
         memory: MemoryResource,
         tool_registry: ToolRegistry,
+        voice: VoiceResource,
     ) -> None:
         self._settings = settings
         self._graph = graph
@@ -67,6 +88,7 @@ class HumanChatApplication:
         self._checkpoint = checkpoint
         self._memory = memory
         self._tool_registry = tool_registry
+        self._voice = voice
 
     def status(self) -> ApplicationStatus:
         return ApplicationStatus(
@@ -76,7 +98,41 @@ class HumanChatApplication:
             memory_persistent=self._memory.persistent,
             mcp_enabled=self._settings.mcp_enabled,
             registered_tool_count=len(self._tool_registry.registrations()),
+            stt_enabled=self._voice.stt is not None,
+            tts_enabled=self._voice.tts is not None,
         )
+
+    def voice_capabilities(self) -> VoiceCapabilities:
+        tts = self._voice.tts
+        return VoiceCapabilities(
+            stt_enabled=self._voice.stt is not None,
+            tts_enabled=tts is not None,
+            tts_available=tts.is_available() if tts is not None else False,
+            tts_auto_start=self._settings.tts_auto_start,
+        )
+
+    def transcribe_audio(
+        self,
+        audio: bytes,
+        *,
+        filename: str,
+        content_type: str,
+    ) -> str:
+        service = self._voice.stt
+        if service is None:
+            raise SpeechRecognitionError("语音识别服务未配置。")
+        return service.transcribe(
+            audio,
+            filename=filename,
+            content_type=content_type,
+        )
+
+    def synthesize_speech(self, text: str) -> SynthesizedAudio:
+        service = self._voice.tts
+        voice_config = self._voice.character.tts
+        if service is None or voice_config is None:
+            raise SpeechSynthesisError("当前角色未配置 TTS 服务。")
+        return service.synthesize(text, voice_config)
 
     def create_session(self) -> SessionRecord:
         session = self._sessions.create()
@@ -241,23 +297,27 @@ def open_human_chat_application(
     """Open every process-scoped resource in dependency order."""
 
     repository = session_repository or create_session_repository(settings)
+    character = load_character(settings.character_path)
     with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
         with open_memory_resource(settings) as memory:
             with open_tool_registry(settings) as tool_registry:
-                graph = build_graph(
-                    settings,
-                    checkpointer=checkpoint.saver,
-                    memory_service=memory.service,
-                    tool_registry=tool_registry,
-                )
-                yield HumanChatApplication(
-                    settings=settings,
-                    graph=graph,
-                    session_repository=repository,
-                    checkpoint=checkpoint,
-                    memory=memory,
-                    tool_registry=tool_registry,
-                )
+                with open_voice_resource(settings, character) as voice:
+                    graph = build_graph(
+                        settings,
+                        checkpointer=checkpoint.saver,
+                        memory_service=memory.service,
+                        tool_registry=tool_registry,
+                        character=character,
+                    )
+                    yield HumanChatApplication(
+                        settings=settings,
+                        graph=graph,
+                        session_repository=repository,
+                        checkpoint=checkpoint,
+                        memory=memory,
+                        tool_registry=tool_registry,
+                        voice=voice,
+                    )
 
 
 def _message_text(message) -> str:

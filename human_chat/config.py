@@ -37,6 +37,11 @@ class Settings(BaseModel):
     stt_model: str = "whisper-1"
     stt_base_url: str = ""
     stt_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    stt_max_audio_bytes: int = Field(
+        default=25 * 1024 * 1024,
+        ge=1024,
+        le=100 * 1024 * 1024,
+    )
     memory_extraction_enabled: bool = True
     memory_user_id: str = "default"
     memory_backend: str = "json"
@@ -78,6 +83,7 @@ _ENV_OVERRIDES = (
     ("stt_model", "HUMANCHAT_STT_MODEL", str),
     ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),
     ("stt_timeout_seconds", "HUMANCHAT_STT_TIMEOUT_SECONDS", float),
+    ("stt_max_audio_bytes", "HUMANCHAT_STT_MAX_AUDIO_BYTES", int),
     (
         "memory_extraction_enabled",
         "HUMANCHAT_MEMORY_EXTRACTION_ENABLED",

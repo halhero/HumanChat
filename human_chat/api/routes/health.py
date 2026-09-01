@@ -22,5 +22,7 @@ def get_health(application: HumanChatApplicationDependency) -> HealthResponse:
             memory_persistent=status.memory_persistent,
             mcp_enabled=status.mcp_enabled,
             registered_tool_count=status.registered_tool_count,
+            stt_enabled=status.stt_enabled,
+            tts_enabled=status.tts_enabled,
         ),
     )

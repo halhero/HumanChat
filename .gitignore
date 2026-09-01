@@ -11,5 +11,6 @@ speech/tmp.wav
 data/sessions/*.json
 data/checkpoints/*.sqlite*
 data/memory/*.json
+data/pytest-tmp*/
 !data/memory/*.example.json
 config/mcp_servers.json

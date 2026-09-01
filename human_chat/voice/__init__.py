@@ -5,6 +5,7 @@ from human_chat.voice.stt import (
     SpeechRecognitionError,
     SpeechToTextService,
 )
+from human_chat.voice.resources import VoiceResource, open_voice_resource
 from human_chat.voice.tts import (
     GptSoVitsTtsService,
     SpeechSynthesisError,
@@ -21,4 +22,6 @@ __all__ = [
     "SpeechToTextService",
     "SynthesizedAudio",
     "TextToSpeechService",
+    "VoiceResource",
+    "open_voice_resource",
 ]

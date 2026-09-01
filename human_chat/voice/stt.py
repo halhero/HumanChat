@@ -19,6 +19,9 @@ class SpeechToTextService(Protocol):
     ) -> str:
         ...
 
+    def close(self) -> None:
+        ...
+
 
 class OpenAICompatibleSttService:
     """Transcribe in-memory audio through an OpenAI-compatible endpoint.
@@ -66,3 +69,6 @@ class OpenAICompatibleSttService:
         if not text:
             raise SpeechRecognitionError("语音识别服务没有返回文本。")
         return text
+
+    def close(self) -> None:
+        self._client.close()

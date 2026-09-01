@@ -3,7 +3,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 
-from human_chat.character import load_character
+from human_chat.character import Character, load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
@@ -123,9 +123,10 @@ def build_graph(
     memory_service: MemoryService,
     checkpointer=None,
     tool_registry: ToolRegistry | None = None,
+    character: Character | None = None,
 ):
     settings = settings or load_settings()
-    character = load_character(settings.character_path)
+    active_character = character or load_character(settings.character_path)
     llm = create_chat_model(settings)
     active_tool_registry = tool_registry or create_tool_registry()
     # Graph 只消费统一注册表中的 LangChain Tool，不区分本地实现和 MCP 来源。
@@ -155,7 +156,7 @@ def build_graph(
         ]
         conversation = [
             SystemMessage(
-                content=_build_system_prompt(character, state.memory_prompt)
+                content=_build_system_prompt(active_character, state.memory_prompt)
             ),
             *state.messages,
             *tool_messages,
@@ -241,7 +242,7 @@ def build_graph(
     def generate_limit_reply(state: ChatState):
         conversation = [
             SystemMessage(
-                content=_build_system_prompt(character, state.memory_prompt)
+                content=_build_system_prompt(active_character, state.memory_prompt)
             ),
             *state.messages,
             *state.tool_messages,

@@ -14,6 +14,7 @@ from human_chat.api.frontend import install_frontend
 from human_chat.api.routes.health import router as health_router
 from human_chat.api.routes.sessions import router as sessions_router
 from human_chat.api.routes.turns import router as turns_router
+from human_chat.api.routes.voice import router as voice_router
 from human_chat.config import Settings, load_settings
 from human_chat.conversation import ConversationService
 from human_chat.logging_config import setup_logging
@@ -61,6 +62,7 @@ def create_api(settings: Settings | None = None) -> FastAPI:
     application.include_router(health_router, prefix="/api/v1")
     application.include_router(sessions_router, prefix="/api/v1")
     application.include_router(turns_router, prefix="/api/v1")
+    application.include_router(voice_router, prefix="/api/v1")
     install_frontend(application, active_settings.frontend_dist_path)
     return application
 

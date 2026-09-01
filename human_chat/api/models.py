@@ -13,6 +13,8 @@ class HealthFeatures(BaseModel):
     memory_persistent: bool
     mcp_enabled: bool
     registered_tool_count: int = Field(ge=0)
+    stt_enabled: bool
+    tts_enabled: bool
 
 
 class HealthResponse(BaseModel):
@@ -78,3 +80,27 @@ class TurnStatusResponse(BaseModel):
 class CancelTurnResponse(BaseModel):
     id: str
     status: Literal["cancelling", "cancelled"]
+
+
+class VoiceCapabilitiesResponse(BaseModel):
+    stt_enabled: bool
+    tts_enabled: bool
+    tts_available: bool
+    tts_auto_start: bool
+    max_audio_bytes: int = Field(ge=1024)
+
+
+class TranscriptionResponse(BaseModel):
+    text: str
+
+
+class SpeechSynthesisRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5_000)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("text must not be blank")
+        return normalized
