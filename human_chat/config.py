@@ -22,11 +22,21 @@ def _parse_path(value: str):
     return path
 
 
+def _parse_optional_path(value: str) -> Path | None:
+    if not value.strip():
+        return None
+    parsed = _parse_path(value)
+    return None if parsed is _UNSET else parsed
+
+
 class Settings(BaseModel):
     openai_api_key: str = Field(default="", description="API key for the chat model provider.")
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     llm_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    stt_model: str = "whisper-1"
+    stt_base_url: str = ""
+    stt_timeout_seconds: float = Field(default=60, ge=1, le=600)
     memory_extraction_enabled: bool = True
     memory_user_id: str = "default"
     memory_backend: str = "json"
@@ -51,12 +61,23 @@ class Settings(BaseModel):
     mcp_config_path: Path = PROJECT_ROOT / "config" / "mcp_servers.json"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
 
+    tts_service_url: str = "http://127.0.0.1:9880"
+    tts_auto_start: bool = False
+    tts_request_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    tts_startup_timeout_seconds: float = Field(default=30, ge=1, le=300)
+    gpt_sovits_dir: Path | None = None
+    gpt_sovits_python: Path | None = None
+    gpt_sovits_api_script: str = "api_v2.py"
+
 
 _ENV_OVERRIDES = (
     ("openai_api_key", "OPENAI_API_KEY", str),
     ("llm_model", "HUMANCHAT_LLM_MODEL", str),
     ("llm_base_url", "HUMANCHAT_LLM_BASE_URL", str),
     ("llm_timeout_seconds", "HUMANCHAT_LLM_TIMEOUT_SECONDS", float),
+    ("stt_model", "HUMANCHAT_STT_MODEL", str),
+    ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),
+    ("stt_timeout_seconds", "HUMANCHAT_STT_TIMEOUT_SECONDS", float),
     (
         "memory_extraction_enabled",
         "HUMANCHAT_MEMORY_EXTRACTION_ENABLED",
@@ -90,6 +111,21 @@ _ENV_OVERRIDES = (
     ("checkpoint_path", "HUMANCHAT_CHECKPOINT_PATH", _parse_path),
     ("mcp_config_path", "HUMANCHAT_MCP_CONFIG_PATH", _parse_path),
     ("session_dir", "HUMANCHAT_SESSION_DIR", _parse_path),
+    ("tts_service_url", "HUMANCHAT_TTS_SERVICE_URL", str),
+    ("tts_auto_start", "HUMANCHAT_TTS_AUTO_START", _parse_bool),
+    (
+        "tts_request_timeout_seconds",
+        "HUMANCHAT_TTS_REQUEST_TIMEOUT_SECONDS",
+        float,
+    ),
+    (
+        "tts_startup_timeout_seconds",
+        "HUMANCHAT_TTS_STARTUP_TIMEOUT_SECONDS",
+        float,
+    ),
+    ("gpt_sovits_dir", "GPT_SOVITS_DIR", _parse_optional_path),
+    ("gpt_sovits_python", "GPT_SOVITS_PYTHON", _parse_optional_path),
+    ("gpt_sovits_api_script", "GPT_SOVITS_API_SCRIPT", str),
 )
 
 

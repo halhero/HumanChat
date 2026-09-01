@@ -1,7 +1,18 @@
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CharacterTtsConfig(BaseModel):
+    """Voice profile sent to the configured GPT-SoVITS-compatible service."""
+
+    ref_audio_path: str
+    prompt_text: str
+    prompt_lang: str = "ja"
+    text_lang: str = "ja"
+    split_method: str = "cut5"
+    speed_factor: float = Field(default=1.0, ge=0.25, le=4.0)
 
 
 class Character(BaseModel):
@@ -9,6 +20,7 @@ class Character(BaseModel):
     name: str
     reply_language: str = "ja"
     system_prompt: str
+    tts: CharacterTtsConfig | None = None
 
 
 def load_character(path: Path) -> Character:
