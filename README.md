@@ -3,9 +3,9 @@
 HumanChat is a Web-oriented chat Agent built with FastAPI, LangGraph, LangChain,
 long-term memory, managed checkpoints, local tools, and optional MCP servers.
 
-The project is being migrated to a separated frontend/backend architecture. The Python
-process is now the backend application only; the former interactive CLI and local audio
-input/playback path have been removed.
+The project uses a separated frontend/backend architecture. The Python process owns Agent
+resources and speech provider clients; microphone capture and audio playback stay in the
+browser where the user's devices actually live.
 
 ## Architecture
 
@@ -24,6 +24,7 @@ ConversationService       HumanChatApplication
         |
         +--> LangGraph + Checkpointer
         +--> MemoryService
+        +--> VoiceResource -> STT / GPT-SoVITS-compatible TTS
         +--> ToolRegistry
                  +--> local tools
                  +--> MCP tools
@@ -48,6 +49,7 @@ HumanChat/
     config.py                 # Environment settings
     graph.py                  # LangGraph Agent workflow
     memory_*.py               # Long-term memory domain and persistence
+    voice/                    # STT, TTS, and optional local TTS process lifecycle
     mcp_*.py                  # MCP configuration and providers
     session_*.py              # Session model and repository contract
     storage/                  # Persistence composition
@@ -156,6 +158,9 @@ POST /sessions/{session_id}/turns      start a turn as an SSE response
 GET  /turns/{turn_id}                  read active or retained turn status
 POST /turns/{turn_id}/decision         resume a review as an SSE response
 POST /turns/{turn_id}/cancel           request cooperative cancellation
+GET  /voice/capabilities               discover optional speech features
+POST /voice/transcriptions             upload audio and receive text
+POST /voice/speech                     synthesize text as audio
 ```
 
 Conversation streams send stable public events such as `turn.progress`,
@@ -166,7 +171,7 @@ review, and cancellation requests.
 
 ## Character
 
-The character file contains only behavior relevant to text conversation:
+The character file keeps text behavior and an optional voice profile:
 
 ```yaml
 id: nanami
@@ -174,6 +179,13 @@ name: 七海
 reply_language: ja
 system_prompt: |
   你是一个聊天助手，请你根据用户的问题以及提供的上下文给出适当的回复。
+tts:
+  ref_audio_path: D:/path/to/reference.wav
+  prompt_text: 参考音频对应的文本
+  prompt_lang: ja
+  text_lang: ja
+  split_method: cut5
+  speed_factor: 1.0
 ```
 
 Select another character prompt with:
@@ -181,6 +193,32 @@ Select another character prompt with:
 ```env
 HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
 ```
+
+## Voice
+
+Speech recognition uses an OpenAI-compatible transcription endpoint:
+
+```env
+HUMANCHAT_STT_MODEL="whisper-1"
+HUMANCHAT_STT_BASE_URL=""
+HUMANCHAT_STT_TIMEOUT_SECONDS="60"
+HUMANCHAT_STT_MAX_AUDIO_BYTES="26214400"
+```
+
+Speech synthesis uses a GPT-SoVITS-compatible service:
+
+```env
+HUMANCHAT_TTS_SERVICE_URL="http://127.0.0.1:9880"
+HUMANCHAT_TTS_AUTO_START="false"
+```
+
+`TTS_AUTO_START=false` does not disable speech synthesis. HumanChat still calls a service
+that is already running at `TTS_SERVICE_URL`. Set it to `true` only when this process should
+start and own a local GPT-SoVITS service, then also configure `GPT_SOVITS_DIR`,
+`GPT_SOVITS_PYTHON`, and `GPT_SOVITS_API_SCRIPT`.
+
+The Web client can record the browser microphone, upload an existing audio file, place the
+transcription in the composer for review, and play synthesized audio for assistant messages.
 
 ## Conversation State
 
@@ -253,6 +291,8 @@ Completed:
    interrupt review.
 4. A compact React frontend with session navigation, streaming replies, cancellation,
    review dialogs, and responsive mobile layout.
+5. Browser-based recording, audio-file transcription, per-message speech playback, and
+   optional automatic reading without server-side device access.
 
 Next:
 

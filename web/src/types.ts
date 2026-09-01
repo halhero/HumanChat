@@ -59,3 +59,11 @@ export interface ProgressEvent {
   stage: string;
   message: string;
 }
+
+export interface VoiceCapabilities {
+  stt_enabled: boolean;
+  tts_enabled: boolean;
+  tts_available: boolean;
+  tts_auto_start: boolean;
+  max_audio_bytes: number;
+}

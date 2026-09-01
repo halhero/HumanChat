@@ -14,6 +14,7 @@ import {
 import { ChatView } from "./components/ChatView";
 import { ReviewDialog } from "./components/ReviewDialog";
 import { Sidebar } from "./components/Sidebar";
+import { useVoice } from "./hooks/useVoice";
 import type {
   ChatMessage,
   CompletedMessageEvent,
@@ -42,6 +43,13 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  const voice = useVoice({
+    onTranscription: (text) =>
+      setDraft((current) =>
+        current.trim() ? `${current.trim()} ${text}` : text,
+      ),
+    onError: setError,
+  });
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -203,6 +211,9 @@ export default function App() {
             ? current
             : [...current, data.message],
         );
+        if (data.message.role === "assistant") {
+          voice.speakAutomatically(data.message.id, data.message.content);
+        }
         break;
       }
       case "memory.saved":
@@ -364,6 +375,17 @@ export default function App() {
         onCreateSession={() => void handleCreateSession()}
         onSubmit={() => void handleSubmit()}
         onCancel={() => void handleCancel()}
+        sttEnabled={voice.capabilities?.stt_enabled === true}
+        ttsEnabled={voice.capabilities?.tts_enabled === true}
+        recording={voice.recording}
+        transcribing={voice.transcribing}
+        autoSpeak={voice.autoSpeak}
+        speechLoadingId={voice.speechLoadingId}
+        speakingId={voice.speakingId}
+        onToggleRecording={voice.toggleRecording}
+        onAudioFile={voice.transcribeFile}
+        onToggleAutoSpeak={voice.toggleAutoSpeak}
+        onToggleSpeech={voice.toggleSpeech}
       />
 
       {error && (

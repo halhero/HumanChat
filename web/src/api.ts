@@ -3,6 +3,7 @@ import type {
   SessionDetail,
   SessionSummary,
   TurnSnapshot,
+  VoiceCapabilities,
 } from "./types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(
@@ -56,6 +57,45 @@ export function cancelTurn(turnId: string) {
     `/turns/${encodeURIComponent(turnId)}/cancel`,
     { method: "POST" },
   );
+}
+
+export function getVoiceCapabilities(signal?: AbortSignal) {
+  return requestJson<VoiceCapabilities>("/voice/capabilities", { signal });
+}
+
+export async function transcribeAudio(
+  audio: Blob,
+  filename: string,
+  signal?: AbortSignal,
+) {
+  const form = new FormData();
+  form.append("audio", audio, filename);
+  const response = await fetch(`${API_BASE}/voice/transcriptions`, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    body: form,
+    signal,
+  });
+  if (!response.ok) {
+    throw await responseError(response);
+  }
+  return response.json() as Promise<{ text: string }>;
+}
+
+export async function synthesizeSpeech(text: string, signal?: AbortSignal) {
+  const response = await fetch(`${API_BASE}/voice/speech`, {
+    method: "POST",
+    headers: {
+      Accept: "audio/*",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  if (!response.ok) {
+    throw await responseError(response);
+  }
+  return response.blob();
 }
 
 export function startTurn(

@@ -218,8 +218,14 @@ input:focus-visible {
 .chat-header__identity {
   display: flex;
   min-width: 0;
+  flex: 1;
   align-items: center;
   gap: 11px;
+}
+
+.chat-header__voice[aria-pressed="true"] {
+  background: #e4eee8;
+  color: #276f52;
 }
 
 .chat-header__identity img {
@@ -301,6 +307,35 @@ input:focus-visible {
   line-height: 1.68;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.message-content {
+  display: flex;
+  max-width: min(78%, 690px);
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.message-content .message-bubble {
+  max-width: 100%;
+}
+
+.message-row--user .message-content {
+  align-items: flex-end;
+}
+
+.message-speech {
+  width: 28px;
+  height: 28px;
+  flex-basis: 28px;
+  margin-top: 1px;
+  color: #68746e;
+}
+
+.message-speech:hover:not(:disabled) {
+  background: #eef1ee;
+  color: #276f52;
 }
 
 .message-row--assistant .message-bubble {
@@ -407,6 +442,45 @@ input:focus-visible {
   border-radius: 8px;
   background: #fbfcfb;
   box-shadow: 0 5px 20px rgba(34, 48, 40, 0.07);
+}
+
+.composer--voice {
+  grid-template-columns: auto minmax(0, 1fr) 40px;
+}
+
+.composer__voice-tools {
+  display: flex;
+  height: 40px;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer__voice-action {
+  width: 34px;
+  height: 34px;
+  flex-basis: 34px;
+  color: #65716a;
+}
+
+.composer__voice-action:hover:not(:disabled) {
+  background: #e9eeea;
+  color: #276f52;
+}
+
+.composer__voice-action--recording {
+  background: #f8e8e4;
+  color: #a84d3d;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .composer:focus-within {
@@ -702,8 +776,24 @@ input:focus-visible {
     max-width: 84%;
   }
 
+  .message-content {
+    max-width: 84%;
+  }
+
+  .message-content .message-bubble {
+    max-width: 100%;
+  }
+
   .composer-area {
     padding: 10px 12px 12px;
+  }
+
+  .composer {
+    padding-left: 7px;
+  }
+
+  .composer__voice-tools {
+    gap: 0;
   }
 
   .error-toast {
