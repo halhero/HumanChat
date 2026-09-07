@@ -6,6 +6,7 @@ from typing import Protocol
 import httpx
 
 from human_chat.character import CharacterTtsConfig
+from human_chat.voice.http import should_trust_environment_proxy
 
 
 class SpeechSynthesisError(RuntimeError):
@@ -43,7 +44,10 @@ class GptSoVitsTtsService:
         timeout_seconds: float = 60,
     ) -> None:
         self._service_url = service_url.rstrip("/")
-        self._client = httpx.Client(timeout=timeout_seconds)
+        self._client = httpx.Client(
+            timeout=timeout_seconds,
+            trust_env=should_trust_environment_proxy(self._service_url),
+        )
 
     def synthesize(
         self,
@@ -68,9 +72,14 @@ class GptSoVitsTtsService:
         if not response.content:
             raise SpeechSynthesisError("TTS 服务返回了空音频。")
         media_type = response.headers.get("content-type", "audio/wav")
+        media_type = media_type.split(";", maxsplit=1)[0].strip().lower()
+        if media_type == "application/octet-stream":
+            media_type = "audio/wav"
+        elif not media_type.startswith("audio/"):
+            raise SpeechSynthesisError("TTS 服务没有返回有效音频。")
         return SynthesizedAudio(
             content=response.content,
-            media_type=media_type.split(";", maxsplit=1)[0].strip(),
+            media_type=media_type,
         )
 
     def is_available(self) -> bool:

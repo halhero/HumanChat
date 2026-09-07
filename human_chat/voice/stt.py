@@ -2,7 +2,10 @@
 
 from typing import Protocol
 
+import httpx
 from openai import OpenAI
+
+from human_chat.voice.http import should_trust_environment_proxy
 
 
 class SpeechRecognitionError(RuntimeError):
@@ -43,7 +46,13 @@ class OpenAICompatibleSttService:
             "timeout": timeout_seconds,
         }
         if base_url.strip():
-            client_options["base_url"] = base_url.rstrip("/")
+            normalized_base_url = base_url.rstrip("/")
+            client_options["base_url"] = normalized_base_url
+            if not should_trust_environment_proxy(normalized_base_url):
+                client_options["http_client"] = httpx.Client(
+                    timeout=timeout_seconds,
+                    trust_env=False,
+                )
         self._client = OpenAI(**client_options)
         self._model = model
 

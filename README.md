@@ -217,6 +217,9 @@ that is already running at `TTS_SERVICE_URL`. Set it to `true` only when this pr
 start and own a local GPT-SoVITS service, then also configure `GPT_SOVITS_DIR`,
 `GPT_SOVITS_PYTHON`, and `GPT_SOVITS_API_SCRIPT`.
 
+Loopback speech endpoints such as `localhost` and `127.0.0.1` bypass system HTTP proxies;
+remote provider URLs continue to honor the standard proxy environment.
+
 The Web client can record the browser microphone, upload an existing audio file, place the
 transcription in the composer for review, and play synthesized audio for assistant messages.
 
