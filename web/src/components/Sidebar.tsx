@@ -1,4 +1,4 @@
-import { MessageSquare, PanelLeftClose, Plus } from "lucide-react";
+import { Brain, MessageSquare, PanelLeftClose, Plus } from "lucide-react";
 
 import type { SessionSummary } from "../types";
 
@@ -9,6 +9,7 @@ interface SidebarProps {
   locked: boolean;
   onClose: () => void;
   onCreate: () => void;
+  onOpenMemories: () => void;
   onSelect: (sessionId: string) => void;
 }
 
@@ -24,6 +25,7 @@ export function Sidebar({
   locked,
   onClose,
   onCreate,
+  onOpenMemories,
   onSelect,
 }: SidebarProps) {
   return (
@@ -35,6 +37,16 @@ export function Sidebar({
             <p className="brand-caption">Agent workspace</p>
           </div>
           <div className="sidebar__actions">
+            <button
+              className="icon-button"
+              type="button"
+              onClick={onOpenMemories}
+              disabled={locked}
+              aria-label="长期记忆"
+              title="长期记忆"
+            >
+              <Brain size={18} aria-hidden="true" />
+            </button>
             <button
               className="icon-button"
               type="button"

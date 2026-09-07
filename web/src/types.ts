@@ -67,3 +67,12 @@ export interface VoiceCapabilities {
   tts_auto_start: boolean;
   max_audio_bytes: number;
 }
+
+export interface MemoryItem {
+  id: string;
+  text: string;
+  created_at: string;
+  updated_at: string;
+  source: string;
+  confidence: number | null;
+}

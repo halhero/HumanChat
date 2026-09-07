@@ -260,6 +260,18 @@ Automatic extraction and user review remain LangGraph nodes. When confirmation i
 the stream emits `review.required`; the browser can approve selected candidates through the
 turn decision endpoint and LangGraph resumes from its checkpoint.
 
+Confirmed memories can also be managed manually from the memory button in the Web sidebar.
+The public API uses stable memory ids rather than display positions:
+
+```text
+GET    /api/v1/memories              list confirmed memories
+POST   /api/v1/memories              add a manual memory
+DELETE /api/v1/memories/{memory_id}  remove one memory
+```
+
+Manual and automatically confirmed memories use the same `MemoryService`; API and UI code
+never access the underlying Repository or JSON/LangGraph Store directly.
+
 ## Tools And MCP
 
 The Graph receives all tools from one `ToolRegistry`. Local project tools are available by

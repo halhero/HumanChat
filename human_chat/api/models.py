@@ -104,3 +104,28 @@ class SpeechSynthesisRequest(BaseModel):
         if not normalized:
             raise ValueError("text must not be blank")
         return normalized
+
+
+class MemoryItemResponse(BaseModel):
+    id: str
+    text: str
+    created_at: datetime
+    updated_at: datetime
+    source: str
+    confidence: float | None = None
+
+
+class MemoryListResponse(BaseModel):
+    items: list[MemoryItemResponse]
+
+
+class CreateMemoryRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5_000)
+
+    @field_validator("text")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("text must not be blank")
+        return normalized

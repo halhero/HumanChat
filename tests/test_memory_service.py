@@ -36,16 +36,16 @@ def test_add_normalizes_and_deduplicates_memory_text():
     assert [item.text for item in service.load().items] == ["用户喜欢中文讲解。"]
 
 
-def test_delete_uses_one_based_display_index():
+def test_delete_uses_stable_memory_id():
     service, repository = create_service()
     first = MemoryItem(text="第一条")
     second = MemoryItem(text="第二条")
     repository.upsert_item(TEST_NAMESPACE, first)
     repository.upsert_item(TEST_NAMESPACE, second)
 
-    assert service.delete(2) == "第二条"
+    assert service.delete_by_id(second.id) == second
     assert [item.text for item in service.load().items] == ["第一条"]
-    assert service.delete(2) is None
+    assert service.delete_by_id(second.id) is None
 
 
 def test_format_for_prompt_uses_repository_items():

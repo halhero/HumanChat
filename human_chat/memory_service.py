@@ -1,3 +1,4 @@
+from threading import RLock
 from typing import Protocol
 
 from human_chat.memory_models import LongTermMemory, MemoryItem
@@ -13,10 +14,10 @@ class MemoryService(Protocol):
         text: str,
         source: str = "manual",
         confidence: float | None = None,
-    ) -> bool:
+    ) -> MemoryItem | None:
         ...
 
-    def delete(self, index: int) -> str | None:
+    def delete_by_id(self, item_id: str) -> MemoryItem | None:
         ...
 
     def format_for_prompt(self) -> str:
@@ -31,50 +32,55 @@ class LongTermMemoryService:
     ):
         self._repository = repository
         self._namespace = namespace
+        self._lock = RLock()
 
     def load(self) -> LongTermMemory:
-        return LongTermMemory(items=self._repository.list_items(self._namespace))
+        with self._lock:
+            items = self._repository.list_items(self._namespace)
+        return LongTermMemory(items=items)
 
     def add(
         self,
         text: str,
         source: str = "manual",
         confidence: float | None = None,
-    ) -> bool:
+    ) -> MemoryItem | None:
         normalized = text.strip()
         if not normalized:
-            return False
+            return None
 
-        items = self._repository.list_items(self._namespace)
-        if normalized in [item.text for item in items]:
-            return False
+        with self._lock:
+            items = self._repository.list_items(self._namespace)
+            if normalized in [item.text for item in items]:
+                return None
 
-        self._repository.upsert_item(
-            self._namespace,
-            MemoryItem(
+            item = MemoryItem(
                 text=normalized,
                 source=source,
                 confidence=confidence,
-            ),
-        )
-        return True
+            )
+            self._repository.upsert_item(self._namespace, item)
+        return item
 
-    def delete(self, index: int) -> str | None:
-        items = self._repository.list_items(self._namespace)
-        zero_based_index = index - 1
-        if zero_based_index < 0 or zero_based_index >= len(items):
+    def delete_by_id(self, item_id: str) -> MemoryItem | None:
+        normalized = item_id.strip()
+        if not normalized:
             return None
 
-        item = items[zero_based_index]
-        if not self._repository.delete_item(self._namespace, item.id):
-            return None
-        return item.text
+        with self._lock:
+            item = self._repository.get_item(self._namespace, normalized)
+            if item is None:
+                return None
+            if not self._repository.delete_item(self._namespace, item.id):
+                return None
+        return item
 
     def format_for_prompt(self) -> str:
-        items = [
-            item.text
-            for item in self._repository.list_items(self._namespace)
-        ]
+        with self._lock:
+            items = [
+                item.text
+                for item in self._repository.list_items(self._namespace)
+            ]
         if not items:
             return "暂无长期记忆。"
         return "\n".join(["长期记忆：", *[f"- {item}" for item in items]])

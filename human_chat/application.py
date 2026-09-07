@@ -14,6 +14,7 @@ from human_chat.config import Settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
 from human_chat.memory_resources import MemoryResource, open_memory_resource
+from human_chat.memory_models import MemoryItem
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -133,6 +134,15 @@ class HumanChatApplication:
         if service is None or voice_config is None:
             raise SpeechSynthesisError("当前角色未配置 TTS 服务。")
         return service.synthesize(text, voice_config)
+
+    def list_memories(self) -> list[MemoryItem]:
+        return self._memory.service.load().items
+
+    def add_memory(self, text: str) -> MemoryItem | None:
+        return self._memory.service.add(text, source="manual")
+
+    def delete_memory(self, memory_id: str) -> MemoryItem | None:
+        return self._memory.service.delete_by_id(memory_id)
 
     def create_session(self) -> SessionRecord:
         session = self._sessions.create()

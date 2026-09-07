@@ -1,5 +1,6 @@
 import type {
   ConversationEvent,
+  MemoryItem,
   SessionDetail,
   SessionSummary,
   TurnSnapshot,
@@ -61,6 +62,31 @@ export function cancelTurn(turnId: string) {
 
 export function getVoiceCapabilities(signal?: AbortSignal) {
   return requestJson<VoiceCapabilities>("/voice/capabilities", { signal });
+}
+
+export async function listMemories(signal?: AbortSignal) {
+  const result = await requestJson<{ items: MemoryItem[] }>("/memories", {
+    signal,
+  });
+  return result.items;
+}
+
+export function createMemory(text: string, signal?: AbortSignal) {
+  return requestJson<MemoryItem>("/memories", {
+    method: "POST",
+    body: JSON.stringify({ text }),
+    signal,
+  });
+}
+
+export async function deleteMemory(memoryId: string, signal?: AbortSignal) {
+  const response = await fetch(
+    `${API_BASE}/memories/${encodeURIComponent(memoryId)}`,
+    { method: "DELETE", signal },
+  );
+  if (!response.ok) {
+    throw await responseError(response);
+  }
 }
 
 export async function transcribeAudio(
