@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -34,7 +35,8 @@ class Settings(BaseModel):
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     llm_timeout_seconds: float = Field(default=60, ge=1, le=600)
-    stt_model: str = "whisper-1"
+    stt_provider: Literal["dashscope", "openai"] = "dashscope"
+    stt_model: str = "qwen3-asr-flash"
     stt_base_url: str = ""
     stt_timeout_seconds: float = Field(default=60, ge=1, le=600)
     stt_max_audio_bytes: int = Field(
@@ -74,12 +76,20 @@ class Settings(BaseModel):
     gpt_sovits_python: Path | None = None
     gpt_sovits_api_script: str = "api_v2.py"
 
+    @property
+    def stt_upload_limit_bytes(self) -> int:
+        # Leave headroom for base64 and the data URL within Qwen's 10 MiB limit.
+        if self.stt_provider == "dashscope":
+            return min(self.stt_max_audio_bytes, 7 * 1024 * 1024)
+        return self.stt_max_audio_bytes
+
 
 _ENV_OVERRIDES = (
     ("openai_api_key", "OPENAI_API_KEY", str),
     ("llm_model", "HUMANCHAT_LLM_MODEL", str),
     ("llm_base_url", "HUMANCHAT_LLM_BASE_URL", str),
     ("llm_timeout_seconds", "HUMANCHAT_LLM_TIMEOUT_SECONDS", float),
+    ("stt_provider", "HUMANCHAT_STT_PROVIDER", str),
     ("stt_model", "HUMANCHAT_STT_MODEL", str),
     ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),
     ("stt_timeout_seconds", "HUMANCHAT_STT_TIMEOUT_SECONDS", float),

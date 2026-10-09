@@ -15,7 +15,12 @@ MEMORY_EXTRACTION_PROMPT = """
 
 
 def extract_memory_candidates(llm, user_text: str, assistant_text: str) -> list[MemoryCandidate]:
-    structured_llm = llm.with_structured_output(MemoryExtractionResult)
+    # The model already supports tool calling. Do not depend on a provider-specific
+    # response_format default, which can silently break on compatible endpoints.
+    structured_llm = llm.with_structured_output(
+        MemoryExtractionResult,
+        method="function_calling",
+    )
     result = structured_llm.invoke(
         [
             HumanMessage(

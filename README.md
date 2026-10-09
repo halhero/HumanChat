@@ -196,14 +196,20 @@ HUMANCHAT_CHARACTER_PATH="characters/nanami.yaml"
 
 ## Voice
 
-Speech recognition uses an OpenAI-compatible transcription endpoint:
+Speech recognition defaults to Bailian Qwen ASR and reuses `OPENAI_API_KEY`:
 
 ```env
-HUMANCHAT_STT_MODEL="whisper-1"
+HUMANCHAT_STT_PROVIDER="dashscope"
+HUMANCHAT_STT_MODEL="qwen3-asr-flash"
 HUMANCHAT_STT_BASE_URL=""
 HUMANCHAT_STT_TIMEOUT_SECONDS="60"
 HUMANCHAT_STT_MAX_AUDIO_BYTES="26214400"
 ```
+
+An empty STT base URL uses the China Bailian compatible endpoint for `dashscope`.
+To use the multipart OpenAI transcription protocol instead, explicitly set
+`HUMANCHAT_STT_PROVIDER="openai"`, a matching model such as `whisper-1`, and the
+appropriate API key/base URL. The two providers do not share an audio request format.
 
 Speech synthesis uses a GPT-SoVITS-compatible service:
 

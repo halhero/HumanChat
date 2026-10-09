@@ -1,3 +1,5 @@
+import os
+from collections.abc import Iterator
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -6,17 +8,21 @@ from human_chat.config import PROJECT_ROOT
 from human_chat.logging_config import get_logger
 
 
-IGNORED_DIRS = {".git", ".idea", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache"}
+IGNORED_DIRS = {
+    ".git", ".idea", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    ".venv", "venv", "node_modules", "dist", "data",
+}
+SENSITIVE_FILES = {"mcp_servers.json", "credentials.json", "secrets.json", "id_rsa", "id_ed25519"}
+SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".sqlite", ".sqlite3", ".db"}
 logger = get_logger(__name__)
 
 
 def list_project_files(root: Path, limit: int = 100) -> list[str]:
     files = []
-    for path in root.rglob("*"):
+    root = root.resolve()
+    for path in _iter_project_files(root):
         if len(files) >= limit:
             break
-        if not path.is_file() or _is_ignored(path):
-            continue
         files.append(path.relative_to(root).as_posix())
     return files
 
@@ -27,7 +33,8 @@ def read_project_file(root: Path, file_path: str, max_chars: int = 8000) -> str:
         raise ValueError(f"不是文件：{file_path}")
 
     try:
-        content = path.read_text(encoding="utf-8")
+        with path.open(encoding="utf-8") as stream:
+            content = stream.read(max_chars + 1)
     except UnicodeDecodeError as exc:
         raise ValueError(f"无法读取非 UTF-8 文本文件：{file_path}") from exc
 
@@ -42,11 +49,10 @@ def search_project_text(root: Path, query: str, limit: int = 50) -> list[dict]:
         return []
 
     matches = []
-    for path in root.rglob("*"):
+    root = root.resolve()
+    for path in _iter_project_files(root):
         if len(matches) >= limit:
             break
-        if not path.is_file() or _is_ignored(path):
-            continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except UnicodeDecodeError:
@@ -113,8 +119,34 @@ def _resolve_project_path(root: Path, file_path: str) -> Path:
     path = (root / file_path).resolve()
     if path != root and root not in path.parents:
         raise ValueError("只能访问项目目录内的文件。")
+    if _is_ignored(path.relative_to(root)):
+        raise ValueError("不允许通过工具访问密钥、运行数据或内部目录。")
     return path
 
 
 def _is_ignored(path: Path) -> bool:
-    return any(part in IGNORED_DIRS for part in path.parts)
+    name = path.name.lower()
+    return (
+        any(part.lower() in IGNORED_DIRS for part in path.parts)
+        or (name.startswith(".env") and name != ".env.example")
+        or name in SENSITIVE_FILES
+        or path.suffix.lower() in SENSITIVE_SUFFIXES
+    )
+
+
+def _iter_project_files(root: Path) -> Iterator[Path]:
+    # Prune dependencies and runtime data before traversal; filtering rglob results
+    # still walks thousands of irrelevant files and can follow unsafe file links.
+    for directory, subdirectories, filenames in os.walk(root, followlinks=False):
+        current = Path(directory)
+        subdirectories[:] = [
+            name for name in subdirectories
+            if not _is_ignored((current / name).relative_to(root))
+        ]
+        for name in filenames:
+            try:
+                path = _resolve_project_path(root, str(current / name))
+            except ValueError:
+                continue
+            if path.is_file():
+                yield path

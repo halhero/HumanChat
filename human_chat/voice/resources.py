@@ -10,7 +10,11 @@ from typing import Iterator
 from human_chat.character import Character
 from human_chat.config import Settings
 from human_chat.logging_config import get_logger
-from human_chat.voice.stt import OpenAICompatibleSttService, SpeechToTextService
+from human_chat.voice.stt import (
+    DashScopeSttService,
+    OpenAICompatibleSttService,
+    SpeechToTextService,
+)
 from human_chat.voice.tts import GptSoVitsTtsService, TextToSpeechService
 
 
@@ -58,10 +62,18 @@ def _create_stt_service(settings: Settings) -> SpeechToTextService | None:
     if not settings.openai_api_key.strip() or not settings.stt_model.strip():
         logger.warning("STT is unavailable because its API key or model is empty")
         return None
-    return OpenAICompatibleSttService(
+    provider_class = (
+        DashScopeSttService
+        if settings.stt_provider == "dashscope"
+        else OpenAICompatibleSttService
+    )
+    base_url = settings.stt_base_url
+    if settings.stt_provider == "dashscope" and not base_url.strip():
+        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    return provider_class(
         api_key=settings.openai_api_key,
         model=settings.stt_model,
-        base_url=settings.stt_base_url,
+        base_url=base_url,
         timeout_seconds=settings.stt_timeout_seconds,
     )
 

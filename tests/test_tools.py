@@ -46,3 +46,20 @@ def test_list_project_files_skips_ignored_dirs(tmp_path: Path):
 
     assert "visible.txt" in files
     assert "__pycache__/hidden.pyc" not in files
+
+
+@pytest.mark.parametrize("relative", [".env", ".env.local", "data/private.json", ".git/config", "config/mcp_servers.json", "secret.pem"])
+def test_tools_block_sensitive_files_in_all_entrypoints(tmp_path: Path, relative: str):
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("fake-sensitive-sentinel", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        read_project_file(tmp_path, relative)
+    assert relative not in list_project_files(tmp_path)
+    assert search_project_text(tmp_path, "fake-sensitive-sentinel") == []
+
+
+def test_tools_allow_environment_example(tmp_path: Path):
+    (tmp_path / ".env.example").write_text("KEY=placeholder", encoding="utf-8")
+    assert read_project_file(tmp_path, ".env.example") == "KEY=placeholder"

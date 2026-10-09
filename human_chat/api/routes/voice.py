@@ -45,7 +45,7 @@ def get_voice_capabilities(
         tts_enabled=capabilities.tts_enabled,
         tts_available=capabilities.tts_available,
         tts_auto_start=capabilities.tts_auto_start,
-        max_audio_bytes=request.app.state.settings.stt_max_audio_bytes,
+        max_audio_bytes=request.app.state.settings.stt_upload_limit_bytes,
     )
 
 
@@ -60,7 +60,7 @@ async def transcribe_audio(
         await audio.close()
         raise ApiError(415, "unsupported_audio_type", "不支持该音频格式。")
 
-    limit = request.app.state.settings.stt_max_audio_bytes
+    limit = request.app.state.settings.stt_upload_limit_bytes
     try:
         content = await audio.read(limit + 1)
     finally:
@@ -79,7 +79,8 @@ async def transcribe_audio(
             content_type=content_type,
         )
     except SpeechRecognitionError as exc:
-        logger.warning("Speech transcription failed", exc_info=True)
+        # Provider exception bodies can contain credential fragments or uploaded data.
+        logger.warning("Speech transcription failed: %s", exc)
         raise ApiError(503, "transcription_failed", str(exc)) from exc
     return TranscriptionResponse(text=text)
 
@@ -92,7 +93,7 @@ def synthesize_speech(
     try:
         audio = application.synthesize_speech(payload.text)
     except SpeechSynthesisError as exc:
-        logger.warning("Speech synthesis failed", exc_info=True)
+        logger.warning("Speech synthesis failed: %s", exc)
         raise ApiError(503, "speech_synthesis_failed", str(exc)) from exc
     return Response(
         content=audio.content,

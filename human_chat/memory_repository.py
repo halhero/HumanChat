@@ -102,10 +102,21 @@ class LangGraphMemoryRepository:
         self.store = store
 
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
-        items = [
-            _memory_item_from_store(stored)
-            for stored in self.store.search(namespace)
-        ]
+        # BaseStore.search defaults to ten results and matches namespace prefixes.
+        # Fetch all pages but do not merge a child namespace into this memory scope.
+        items = []
+        offset = 0
+        page_size = 100
+        while True:
+            page = self.store.search(namespace, limit=page_size, offset=offset)
+            items.extend(
+                _memory_item_from_store(stored)
+                for stored in page
+                if tuple(stored.namespace) == namespace
+            )
+            if len(page) < page_size:
+                break
+            offset += len(page)
         return sorted(items, key=lambda item: item.created_at)
 
     def get_item(

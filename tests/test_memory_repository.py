@@ -66,3 +66,15 @@ def test_memory_path_sanitizes_user_namespace(tmp_path):
 
     assert path.parent == tmp_path
     assert path.name == "memory.unsafe_user.json"
+
+
+def test_langgraph_repository_reads_all_pages_and_exact_namespace():
+    namespace = ("users", "test", "memory")
+    store = InMemoryStore()
+    repository = LangGraphMemoryRepository(store)
+    items = [MemoryItem(text=f"memory {index}") for index in range(115)]
+    for item in items:
+        repository.upsert_item(namespace, item)
+    repository.upsert_item((*namespace, "child"), MemoryItem(text="other scope"))
+
+    assert repository.list_items(namespace) == items
