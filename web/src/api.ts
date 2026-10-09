@@ -53,6 +53,13 @@ export function getTurn(turnId: string, signal?: AbortSignal) {
   });
 }
 
+export function getSessionTurn(sessionId: string, signal?: AbortSignal) {
+  return requestJson<TurnSnapshot | null>(
+    `/sessions/${encodeURIComponent(sessionId)}/turn`,
+    { signal },
+  );
+}
+
 export function cancelTurn(turnId: string) {
   return requestJson<{ id: string; status: "cancelling" | "cancelled" }>(
     `/turns/${encodeURIComponent(turnId)}/cancel`,
@@ -204,28 +211,49 @@ async function streamRequest(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
+  let phaseFinished = false;
+  const emit = (event: ConversationEvent) => {
+    if (
+      ["review.required", "turn.completed", "turn.cancelled", "turn.failed"].includes(
+        event.type,
+      )
+    ) {
+      phaseFinished = true;
+    }
+    onEvent(event);
+  };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
 
-    let boundary = findEventBoundary(buffer);
-    while (boundary) {
-      const block = buffer.slice(0, boundary.index);
-      buffer = buffer.slice(boundary.index + boundary.length);
-      const event = parseEvent(block);
-      if (event) {
-        onEvent(event);
+      let boundary = findEventBoundary(buffer);
+      while (boundary) {
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
+        const event = parseEvent(block);
+        if (event) {
+          emit(event);
+        }
+        boundary = findEventBoundary(buffer);
       }
-      boundary = findEventBoundary(buffer);
+      if (done) {
+        break;
+      }
     }
-    if (done) {
-      break;
-    }
-  }
 
-  const trailingEvent = parseEvent(buffer.trim());
-  if (trailingEvent) {
-    onEvent(trailingEvent);
+    const trailingEvent = parseEvent(buffer.trim());
+    if (trailingEvent) {
+      emit(trailingEvent);
+    }
+    if (!phaseFinished) {
+      throw new ApiError("对话连接提前中断，请重新打开会话确认状态。", response.status);
+    }
+  } finally {
+    if (!phaseFinished) {
+      await reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
   }
 }
 

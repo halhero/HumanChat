@@ -24,6 +24,25 @@ from human_chat.conversation import (
 router = APIRouter(tags=["turns"])
 
 
+@router.get("/sessions/{session_id}/turn", response_model=TurnStatusResponse | None)
+async def get_session_turn(
+    session_id: str,
+    conversations: ConversationServiceDependency,
+) -> TurnStatusResponse | None:
+    try:
+        turn = await conversations.get_session_turn(session_id)
+    except SessionNotFoundError as exc:
+        raise ApiError(404, "session_not_found", str(exc)) from exc
+    if turn is None:
+        return None
+    return TurnStatusResponse(
+        id=turn.id,
+        session_id=turn.session_id,
+        status=turn.status,
+        review=turn.review,
+    )
+
+
 @router.post("/sessions/{session_id}/turns")
 async def start_turn(
     session_id: str,

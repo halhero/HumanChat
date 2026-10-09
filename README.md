@@ -154,6 +154,7 @@ All browser endpoints are versioned under `/api/v1`:
 GET  /sessions                         list recent sessions
 POST /sessions                         create a session
 GET  /sessions/{session_id}            read metadata and message history
+GET  /sessions/{session_id}/turn       recover active or checkpointed review state
 POST /sessions/{session_id}/turns      start a turn as an SSE response
 GET  /turns/{turn_id}                  read active or retained turn status
 POST /turns/{turn_id}/decision         resume a review as an SSE response
@@ -168,6 +169,12 @@ Conversation streams send stable public events such as `turn.progress`,
 `turn.failed`. Internal graph state and routine tool-call traces are not part of the
 browser contract. The response header `X-Turn-ID` identifies the turn for status,
 review, and cancellation requests.
+
+On reload, the browser queries the session's current turn rather than trusting a locally
+cached turn id. Pending tool and memory reviews are recovered from persistent LangGraph
+checkpoints after a backend restart. A recovered review receives a new HTTP turn id;
+the session id and checkpoint remain unchanged. Cancelling a pending phase clears its
+Graph continuation without executing unapproved tools or saving unapproved memories.
 
 ## Character
 
@@ -211,6 +218,10 @@ To use the multipart OpenAI transcription protocol instead, explicitly set
 `HUMANCHAT_STT_PROVIDER="openai"`, a matching model such as `whisper-1`, and the
 appropriate API key/base URL. The two providers do not share an audio request format.
 
+Bailian's inline audio payload has a 10 MiB base64 limit. For this provider, the effective
+raw upload limit is capped at 7 MiB (or a smaller configured value); the capabilities API
+returns that effective limit so the browser and backend apply the same constraint.
+
 Speech synthesis uses a GPT-SoVITS-compatible service:
 
 ```env
@@ -243,6 +254,10 @@ HUMANCHAT_SESSION_DIR="data/sessions"
 
 SQLite is persistent across backend restarts. Memory fallback is opt-in because it cannot
 recover a conversation after process exit.
+
+The current HTTP turn coordinator is process-local. Run one backend worker for this
+single-user application; persistent checkpoints alone do not provide multi-worker locking
+or automatic resumption of provider calls interrupted by a process crash.
 
 ## Long-Term Memory
 

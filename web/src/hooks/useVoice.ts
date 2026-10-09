@@ -70,8 +70,14 @@ export function useVoice({ onTranscription, onError }: VoiceOptions) {
     speechControllerRef.current?.abort();
     speechControllerRef.current = null;
     if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
+      const audio = audioRef.current;
+      // Clearing an active source can itself emit an error. Remove handlers first
+      // so normal completion/stop does not report a false playback failure.
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
       audioRef.current = null;
     }
     if (audioUrlRef.current) {
@@ -106,7 +112,7 @@ export function useVoice({ onTranscription, onError }: VoiceOptions) {
         setSpeakingId(messageId);
         await audio.play();
       } catch (reason) {
-        if (!isAbortError(reason)) {
+        if (!controller.signal.aborted && !isAbortError(reason)) {
           stopPlayback();
           onErrorRef.current(errorMessage(reason));
         }
@@ -170,12 +176,16 @@ export function useVoice({ onTranscription, onError }: VoiceOptions) {
 
   const transcribeFile = useCallback(
     (file: File) => {
-      const contentType = file.type || audioTypeFromFilename(file.name);
+      // Browsers commonly label WebM/MP4 audio containers as video/* or generic
+      // binary data. Normalize recognized extensions before submitting the upload.
+      const contentType = file.type.startsWith("audio/")
+        ? file.type
+        : audioTypeFromFilename(file.name);
       if (contentType === "application/octet-stream") {
         onErrorRef.current("无法识别该文件的音频格式。");
         return;
       }
-      const upload = file.type
+      const upload = file.type === contentType
         ? file
         : new File([file], file.name, { type: contentType });
       void uploadForTranscription(upload, upload.name);

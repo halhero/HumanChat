@@ -6,6 +6,7 @@ import {
   cancelTurn,
   createSession,
   getSession,
+  getSessionTurn,
   getTurn,
   listSessions,
   resumeTurn,
@@ -24,8 +25,6 @@ import type {
   ReviewRequest,
   SessionSummary,
 } from "./types";
-
-const turnStorageKey = (sessionId: string) => `human-chat:turn:${sessionId}`;
 
 export default function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -57,7 +56,7 @@ export default function App() {
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions],
   );
-  const locked = busy || review !== null;
+  const locked = busy || review !== null || voice.recording || voice.transcribing;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -95,30 +94,40 @@ export default function App() {
 
     const load = async () => {
       const detail = await getSession(activeSessionId, controller.signal);
+      if (controller.signal.aborted) return;
       setMessages(detail.messages);
 
-      const storedTurnId = sessionStorage.getItem(turnStorageKey(activeSessionId));
-      if (!storedTurnId) {
+      let turn = await getSessionTurn(activeSessionId, controller.signal);
+      if (controller.signal.aborted || !turn) return;
+      if (turn.status === "awaiting_review" && turn.review) {
+        setCurrentTurnId(turn.id);
+        setReview(turn.review);
+        setSelectedReviewIds(defaultSelection(turn.review));
         return;
       }
-      try {
-        const turn = await getTurn(storedTurnId, controller.signal);
-        if (turn.status === "awaiting_review" && turn.review) {
-          setCurrentTurnId(turn.id);
-          setReview(turn.review);
-          setSelectedReviewIds(defaultSelection(turn.review));
-          return;
+      if (turn.status === "running" || turn.status === "cancelling") {
+        setCurrentTurnId(turn.id);
+        setBusy(true);
+        setProgress("正在停止断开的对话");
+        try {
+          await cancelTurn(turn.id);
+        } catch (reason) {
+          // The phase may have completed between the snapshot and cancel request.
+          if (!(reason instanceof ApiError && reason.status === 409)) throw reason;
         }
-        if (turn.status === "running" || turn.status === "cancelling") {
-          await cancelTurn(turn.id).catch(() => undefined);
+        // A provider call may finish after the browser reloads. Keep the composer
+        // locked until cancellation settles instead of racing a new turn.
+        while (turn.status === "running" || turn.status === "cancelling") {
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+          if (controller.signal.aborted) return;
+          turn = await getTurn(turn.id, controller.signal);
         }
-        sessionStorage.removeItem(turnStorageKey(activeSessionId));
-      } catch (reason) {
-        if (reason instanceof ApiError && reason.status === 404) {
-          sessionStorage.removeItem(turnStorageKey(activeSessionId));
-          return;
-        }
-        throw reason;
+        const refreshed = await getSession(activeSessionId, controller.signal);
+        if (controller.signal.aborted) return;
+        setMessages(refreshed.messages);
+        setBusy(false);
+        setProgress(null);
+        setCurrentTurnId(null);
       }
     };
 
@@ -126,6 +135,8 @@ export default function App() {
       .catch((reason: unknown) => {
         if (!isAbortError(reason)) {
           setError(errorMessage(reason));
+          setBusy(false);
+          setProgress(null);
         }
       })
       .finally(() => {
@@ -179,20 +190,15 @@ export default function App() {
     setError(null);
   };
 
-  const rememberTurn = (turnId: string, sessionId: string) => {
+  const rememberTurn = (turnId: string) => {
     setCurrentTurnId(turnId);
-    sessionStorage.setItem(turnStorageKey(sessionId), turnId);
   };
 
-  const clearTurn = (sessionId: string) => {
+  const clearTurn = () => {
     setCurrentTurnId(null);
-    sessionStorage.removeItem(turnStorageKey(sessionId));
   };
 
-  const handleConversationEvent = (
-    event: ConversationEvent,
-    sessionId: string,
-  ) => {
+  const handleConversationEvent = (event: ConversationEvent) => {
     switch (event.type) {
       case "turn.started":
         setProgress("正在理解你的问题");
@@ -232,18 +238,17 @@ export default function App() {
         setError(String(event.data.message || "本轮对话未能完成。"));
         setReview(null);
         setProgress(null);
-        clearTurn(sessionId);
+        clearTurn();
         break;
       case "turn.cancelled":
         setReview(null);
         setProgress(null);
-        clearTurn(sessionId);
+        clearTurn();
         break;
       case "turn.completed":
         setReview(null);
         setProgress(null);
-        clearTurn(sessionId);
-        void refreshSessions();
+        clearTurn();
         break;
       default:
         break;
@@ -252,6 +257,7 @@ export default function App() {
 
   const runStream = async (
     operation: (signal: AbortSignal) => Promise<void>,
+    sessionId: string,
   ): Promise<boolean> => {
     const controller = new AbortController();
     streamControllerRef.current = controller;
@@ -263,20 +269,30 @@ export default function App() {
     } catch (reason) {
       if (!isAbortError(reason)) {
         setError(errorMessage(reason));
+        setProgress(null);
       }
       return false;
     } finally {
       if (streamControllerRef.current === controller) {
         streamControllerRef.current = null;
       }
-      setBusy(false);
+      // Reconcile optimistic messages and stable ids with the committed checkpoint.
+      try {
+        const detail = await getSession(sessionId);
+        setMessages(detail.messages);
+        await refreshSessions();
+      } catch (reason) {
+        setError(errorMessage(reason));
+      } finally {
+        setBusy(false);
+      }
     }
   };
 
   const handleSubmit = async () => {
     const message = draft.trim();
     const sessionId = activeSessionId;
-    if (!message || !sessionId || busy || review) {
+    if (!message || !sessionId || locked || loadingHistory) {
       return;
     }
 
@@ -293,11 +309,12 @@ export default function App() {
         message,
         (turnId) => {
           opened = true;
-          rememberTurn(turnId, sessionId);
+          rememberTurn(turnId);
         },
-        (event) => handleConversationEvent(event, sessionId),
+        handleConversationEvent,
         signal,
       ),
+      sessionId,
     );
     if (!succeeded && !opened) {
       setMessages((current) =>
@@ -334,10 +351,11 @@ export default function App() {
         turnId,
         decision,
         selectedIds,
-        (activeTurnId) => rememberTurn(activeTurnId, sessionId),
-        (event) => handleConversationEvent(event, sessionId),
+        (activeTurnId) => rememberTurn(activeTurnId),
+        handleConversationEvent,
         signal,
       ),
+      sessionId,
     );
   };
 

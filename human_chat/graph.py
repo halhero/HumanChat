@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -264,8 +266,8 @@ def build_graph(
         return {
             "assistant_text": assistant_text,
             "messages": [
-                HumanMessage(content=state.question),
-                AIMessage(content=assistant_text),
+                HumanMessage(content=state.question, id=uuid4().hex),
+                AIMessage(content=assistant_text, id=uuid4().hex),
             ],
         }
 

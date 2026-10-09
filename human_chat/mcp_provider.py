@@ -56,9 +56,10 @@ class McpAsyncBridge:
     """
 
     def __init__(self):
-        # 事件循环先在当前线程创建，再交给唯一后台线程运行。_ready 可以避免调用
-        # 方在线程尚未进入 run_forever 时提交任务。
-        self._loop = asyncio.new_event_loop()
+        # Windows ProactorEventLoop 会在创建线程中管理进程级 signal wakeup fd。
+        # 必须在实际拥有循环的后台线程创建它，不能先在主线程创建再移交。
+        self._loop: asyncio.AbstractEventLoop
+        self._startup_error: Exception | None = None
         self._ready = threading.Event()
         self._closed = False
         self._thread = threading.Thread(
@@ -68,6 +69,10 @@ class McpAsyncBridge:
         )
         self._thread.start()
         self._ready.wait()
+        if self._startup_error is not None:
+            self._closed = True
+            self._thread.join()
+            raise RuntimeError("MCP 后台事件循环创建失败。") from self._startup_error
 
     def run(
         self,
@@ -125,7 +130,13 @@ class McpAsyncBridge:
     def _run_event_loop(self) -> None:
         """后台线程入口，并在停止时完整回收 asyncio 资源。"""
 
-        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+        except Exception as exc:
+            self._startup_error = exc
+            self._ready.set()
+            return
         self._ready.set()
         try:
             self._loop.run_forever()

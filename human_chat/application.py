@@ -188,6 +188,37 @@ class HumanChatApplication:
                 )
         return session, public_messages
 
+    def get_pending_review(self, session_id: str) -> dict | None:
+        """Recover the review payload from the authoritative Graph checkpoint."""
+        session = self.get_session(session_id)
+        snapshot = self._graph.get_state(self._graph_config(session.thread_id))
+        for pending in snapshot.interrupts:
+            if isinstance(pending.value, dict):
+                return pending.value
+        return None
+
+    def discard_pending_turn(self, session_id: str) -> None:
+        """Finish a stopped phase without running tools or accepting memories.
+
+        The caller must have stopped the worker first. Updating as the terminal node
+        clears pending Graph tasks while retaining the committed message history.
+        """
+        session = self.get_session(session_id)
+        config = self._graph_config(session.thread_id)
+        snapshot = self._graph.get_state(config)
+        if snapshot.next:
+            self._graph.update_state(
+                config,
+                {
+                    "tool_messages": [],
+                    "tool_review_request": None,
+                    "tool_review_approved": None,
+                    "memory_review_request": None,
+                    "memory_saved_count": 0,
+                },
+                as_node="review_memory",
+            )
+
     def stream_turn(
         self,
         session_id: str,

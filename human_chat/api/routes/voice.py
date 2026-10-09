@@ -56,6 +56,11 @@ async def transcribe_audio(
     audio: UploadFile = File(...),
 ) -> TranscriptionResponse:
     content_type = (audio.content_type or "").split(";", maxsplit=1)[0].lower()
+    content_type = {
+        "video/webm": "audio/webm",
+        "video/mp4": "audio/mp4",
+        "application/ogg": "audio/ogg",
+    }.get(content_type, content_type)
     if content_type not in _SUPPORTED_AUDIO_TYPES:
         await audio.close()
         raise ApiError(415, "unsupported_audio_type", "不支持该音频格式。")

@@ -223,7 +223,7 @@ export function ChatView({
                 className="icon-button composer__voice-action"
                 type="button"
                 onClick={() => audioFileRef.current?.click()}
-                disabled={!hasSession || busy || recording || transcribing}
+                disabled={!hasSession || loadingHistory || busy || recording || transcribing}
                 aria-label="选择音频文件"
                 title="选择音频文件"
               >
@@ -235,7 +235,7 @@ export function ChatView({
                 }`}
                 type="button"
                 onClick={onToggleRecording}
-                disabled={!hasSession || busy || transcribing}
+                disabled={!hasSession || loadingHistory || busy || transcribing}
                 aria-label={recording ? "结束录音" : "开始录音"}
                 title={recording ? "结束录音" : "开始录音"}
               >
@@ -255,7 +255,7 @@ export function ChatView({
             onChange={(event) => onDraftChange(event.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={hasSession ? "输入消息" : "暂无活动会话"}
-            disabled={!hasSession || busy || transcribing}
+            disabled={!hasSession || loadingHistory || busy || transcribing}
             maxLength={20_000}
             aria-label="消息内容"
           />
@@ -273,7 +273,7 @@ export function ChatView({
             <button
               className="composer__action"
               type="submit"
-              disabled={!hasSession || !draft.trim()}
+              disabled={!hasSession || loadingHistory || !draft.trim() || recording || transcribing}
               aria-label="发送消息"
               title="发送消息"
             >

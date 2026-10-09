@@ -66,6 +66,7 @@ class ConversationService:
             raise ValueError("问题不能为空。")
 
         async with self._lock:
+            await self._recover_session_review(session_id)
             if session_id in self._active_sessions:
                 raise SessionBusyError("该会话已有一轮对话正在进行。")
             turn = ConversationTurn(
@@ -109,6 +110,9 @@ class ConversationService:
         async with self._lock:
             turn = self._require_turn(turn_id)
             if turn.status == TurnStatus.AWAITING_REVIEW:
+                await asyncio.to_thread(
+                    self._application.discard_pending_turn, turn.session_id
+                )
                 turn.status = TurnStatus.CANCELLED
                 turn.pending_review = None
                 turn.updated_at = now_local()
@@ -124,19 +128,54 @@ class ConversationService:
                 return turn.status
             raise TurnStateError("该对话已经结束，无法取消。")
 
+    async def get_session_turn(self, session_id: str) -> TurnSnapshot | None:
+        try:
+            await asyncio.to_thread(self._application.get_session, session_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise SessionNotFoundError("会话不存在。") from exc
+        async with self._lock:
+            await self._recover_session_review(session_id)
+            turn_id = self._active_sessions.get(session_id)
+            if turn_id is None:
+                return None
+            return self._snapshot(self._require_turn(turn_id))
+
     async def get_turn(self, turn_id: str) -> TurnSnapshot:
         async with self._lock:
             turn = self._require_turn(turn_id)
-            return TurnSnapshot(
-                id=turn.id,
-                session_id=turn.session_id,
-                status=turn.status,
-                review=(
-                    turn.pending_review.public_payload
-                    if turn.pending_review is not None
-                    else None
-                ),
-            )
+            return self._snapshot(turn)
+
+    @staticmethod
+    def _snapshot(turn: ConversationTurn) -> TurnSnapshot:
+        return TurnSnapshot(
+            id=turn.id,
+            session_id=turn.session_id,
+            status=turn.status,
+            review=(
+                turn.pending_review.public_payload
+                if turn.pending_review is not None
+                else None
+            ),
+        )
+
+    async def _recover_session_review(self, session_id: str) -> None:
+        # Called under the service lock: HTTP requests cannot concurrently recover
+        # two turn ids for the same checkpoint or bypass an existing approval.
+        if session_id in self._active_sessions:
+            return
+        payload = await asyncio.to_thread(
+            self._application.get_pending_review, session_id
+        )
+        if payload is None:
+            return
+        turn = ConversationTurn(
+            id=uuid4().hex,
+            session_id=session_id,
+            status=TurnStatus.AWAITING_REVIEW,
+            pending_review=create_pending_review(payload),
+        )
+        self._remember_turn(turn)
+        self._active_sessions[session_id] = turn.id
 
     async def iter_events(
         self,
@@ -231,6 +270,9 @@ class ConversationService:
         else:
             async with self._lock:
                 if turn.status == TurnStatus.CANCELLING:
+                    await asyncio.to_thread(
+                        self._application.discard_pending_turn, turn.session_id
+                    )
                     turn.status = TurnStatus.CANCELLED
                     self._release_session(turn)
                     queue.put_nowait(
@@ -304,7 +346,7 @@ class ConversationService:
                             "message.completed",
                             {
                                 "message": {
-                                    "id": uuid4().hex,
+                                    "id": update["messages"][-1].id,
                                     "role": "assistant",
                                     "content": update["assistant_text"],
                                 }
@@ -326,6 +368,10 @@ class ConversationService:
         queue: asyncio.Queue,
         status: TurnStatus,
     ) -> None:
+        if status == TurnStatus.CANCELLED:
+            await asyncio.to_thread(
+                self._application.discard_pending_turn, turn.session_id
+            )
         async with self._lock:
             turn.status = status
             turn.updated_at = now_local()

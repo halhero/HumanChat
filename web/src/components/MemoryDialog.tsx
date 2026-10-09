@@ -46,7 +46,7 @@ export function MemoryDialog({ onClose, onError }: MemoryDialogProps) {
           window.setTimeout(() => inputRef.current?.focus(), 0);
         }
       });
-    return () => controller.abort();
+    return () => controllerRef.current?.abort();
   }, [onError]);
 
   const submit = async (event: FormEvent) => {

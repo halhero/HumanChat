@@ -38,7 +38,7 @@ def install_exception_handlers(app: FastAPI) -> None:
     ):
         logger.info(
             "Request validation failed: %s",
-            exc.errors(),
+            [{"loc": item["loc"], "type": item["type"]} for item in exc.errors()],
             extra={"request_id": _request_id(request)},
         )
         return _error_response(

@@ -1,6 +1,10 @@
+import asyncio
+import threading
+
 import pytest
 from langchain_core.tools import tool
 
+from human_chat.mcp_provider import McpAsyncBridge
 from human_chat.tool_provider import (
     RegisteredTool,
     ToolRegistry,
@@ -54,3 +58,40 @@ def test_registry_rejects_duplicate_tool_names():
 
     with pytest.raises(ValueError, match="工具名称不能重复"):
         ToolRegistry([registration, registration])
+
+
+def test_mcp_bridge_creates_and_closes_loop_in_its_own_thread(monkeypatch):
+    new_event_loop = asyncio.new_event_loop
+    creation_threads = []
+    created_loops = []
+
+    def record_event_loop():
+        creation_threads.append(threading.current_thread().name)
+        loop = new_event_loop()
+        created_loops.append(loop)
+        return loop
+
+    monkeypatch.setattr(asyncio, "new_event_loop", record_event_loop)
+    bridge = McpAsyncBridge()
+    try:
+        assert bridge.run(
+            asyncio.sleep(0, result="ok"), timeout=2, operation="validation"
+        ) == "ok"
+    finally:
+        bridge.close()
+        bridge.close()
+
+    assert creation_threads == ["humanchat-mcp-event-loop"]
+    assert created_loops[0].is_closed()
+    assert not bridge._thread.is_alive()
+
+
+def test_mcp_bridge_reports_event_loop_startup_failure(monkeypatch):
+    def fail_event_loop():
+        raise OSError("isolated loop creation failure")
+
+    monkeypatch.setattr(asyncio, "new_event_loop", fail_event_loop)
+    with pytest.raises(RuntimeError) as failure:
+        McpAsyncBridge()
+
+    assert isinstance(failure.value.__cause__, OSError)
