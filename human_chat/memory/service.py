@@ -3,7 +3,7 @@ from typing import Protocol
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
-from human_chat.memory.models import Evidence, LongTermMemory, MemoryItem, MemoryVersion, Mutation, MutationResult
+from human_chat.memory.models import Evidence, LongTermMemory, MemoryItem, MemoryVersion, Mutation, MutationResult, fingerprints
 from human_chat.memory.repository import MemoryNamespace, MemoryRepository
 from human_chat.messages import new_source
 
@@ -126,6 +126,14 @@ class LongTermMemoryService:
                     return result("already_applied", item_id=item.id)
             sources = {e.message_id for e in mutation.evidence}
             observed = max(e.message_time for e in mutation.evidence)
+            for stored in items:
+                if mutation.kind == "add":
+                    for version in stored.history:
+                        if (version.status == "revoked"
+                                and fingerprints(mutation.text, mutation.assertion).intersection(fingerprints(version.text, version.assertion))
+                                and (sources.intersection(e.message_id for e in version.evidence)
+                                     or (version.ended_at and observed <= version.ended_at))):
+                            return result("rejected", "revoked_source")
             if mutation.kind == "add":
                 if mutation.target_id is not None or mutation.expected_version is not None:
                     return result("rejected", "add_has_target")
@@ -149,29 +157,46 @@ class LongTermMemoryService:
                     return result("conflict", "older_source", item.id)
                 if sources.issubset(item.seen_sources):
                     return result("rejected", "replayed_source", item.id)
-                if mutation.kind not in ("update", "duplicate"):
-                    return result("rejected", "unsupported_operation", item.id)
-                if item.assertion is None or mutation.assertion is None:
-                    return result("rejected", "structured_target_required", item.id)
-                if item.assertion.identity() != mutation.assertion.identity():
-                    return result("rejected", "identity_changed", item.id)
+                if mutation.kind != "retract":
+                    if (item.assertion is None) != (mutation.assertion is None):
+                        return result("rejected", "incompatible_assertion", item.id)
+                    if item.assertion:
+                        old_identity, new_identity = item.assertion.identity(), mutation.assertion.identity()
+                        if old_identity[:2] != new_identity[:2] or (
+                            old_identity[2] != new_identity[2] and not (mutation.kind == "correct" and "scope" in mutation.fields)
+                        ):
+                            return result("rejected", "identity_changed", item.id)
                 item = item.model_copy(deep=True)
                 if mutation.kind == "duplicate":
-                    claimed = mutation.assertion.model_dump(exclude_none=True)
-                    if any(item.assertion.model_dump()[key] != value for key, value in claimed.items()):
+                    changed = (any(item.assertion.model_dump()[key] != value
+                                   for key, value in mutation.assertion.model_dump(exclude_none=True).items())
+                               if item.assertion else item.text != mutation.text)
+                    if changed:
                         return result("rejected", "duplicate_changes_content", item.id)
                     item.evidence = list({(e.message_id, e.quote): e for e in [*item.evidence, *mutation.evidence]}.values())
                 else:
-                    if not mutation.fields or "scope" in mutation.fields:
+                    if mutation.kind != "retract" and (not mutation.fields or ("scope" in mutation.fields and mutation.kind != "correct")):
                         return result("rejected", "invalid_update_fields", item.id)
-                    if "value" in mutation.fields and not mutation.assertion.value:
+                    if "value" in mutation.fields and item.assertion and not mutation.assertion.value:
                         return result("rejected", "cannot_clear_content", item.id)
+                    if item.assertion is None and mutation.kind != "retract" and (
+                        mutation.kind != "correct" or mutation.fields != ["value"] or not mutation.text.strip()
+                    ):
+                        return result("rejected", "legacy_requires_full_correction", item.id)
                     item.history.append(MemoryVersion(version=item.version, text=item.text,
                         assertion=item.assertion, evidence=item.evidence, observed_at=item.observed_at,
-                        ended_at=observed, status="historical"))
-                    patch = {field: getattr(mutation.assertion, field) for field in mutation.fields}
-                    item.assertion = type(item.assertion).model_validate({**item.assertion.model_dump(), **patch})
-                    item.text = item.assertion.render()
+                        ended_at=observed, status="historical" if mutation.kind == "update" else "revoked"))
+                    if mutation.kind == "retract" or (mutation.kind == "correct" and mutation.revoke_history):
+                        for version in item.history:
+                            version.status = "revoked"
+                    if mutation.kind == "retract":
+                        item.status = "retracted"
+                    elif item.assertion:
+                        patch = {field: getattr(mutation.assertion, field) for field in mutation.fields}
+                        item.assertion = type(item.assertion).model_validate({**item.assertion.model_dump(), **patch})
+                        item.text = item.assertion.render()
+                    else:
+                        item.text = mutation.text.strip()
                     item.evidence = mutation.evidence
                 item.version += 1
                 item.observed_at = observed

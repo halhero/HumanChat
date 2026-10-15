@@ -118,6 +118,7 @@ class Mutation(BaseModel):
     target_id: str | None = None
     expected_version: int | None = Field(default=None, ge=1, strict=True)
     fields: list[PatchField] = Field(default_factory=list)
+    revoke_history: bool = False
     reason: str = ""
 
     def digest(self):

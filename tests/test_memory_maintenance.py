@@ -45,3 +45,18 @@ def test_reaffirmation_blocks_late_older_state_and_foreign_user(service):
     assert service.apply(operation("late", second=2, kind="update", target=item, fields=["state"])).reason == "older_source"
     foreign = operation("foreign").model_copy(update={"user_id": "other"})
     assert service.apply(foreign).reason == "wrong_user"
+
+
+def test_correction_and_retraction_do_not_become_valid_history(service):
+    service.apply(operation("seed"))
+    item = service.load().items[0]
+    correction = operation("correct", second=2, kind="correct", target=item,
+        assertion=item.assertion.model_copy(update={"deadline": "明年", "scope": "代码审查"}), fields=["deadline", "scope"])
+    assert service.apply(correction).outcome == "applied"
+    item = service.load().items[0]
+    assert item.history[0].status == "revoked" and item.assertion.scope == "代码审查"
+    old = operation("old-replay", second=1)
+    assert service.apply(old).reason == "revoked_source"
+    assert service.apply(operation("withdraw", second=3, kind="retract", target=item)).outcome == "applied"
+    assert service.load().items == []
+    assert all(version.status == "revoked" for version in service.inventory()[0].history)
