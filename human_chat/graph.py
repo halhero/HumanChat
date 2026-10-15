@@ -16,6 +16,7 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.memory.service import MemoryService
+from human_chat.memory.request import assemble_request, context_references, recent_history
 from human_chat.messages import SourceMessage, new_source
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
@@ -127,6 +128,7 @@ def build_graph(
     checkpointer=None,
     tool_registry: ToolRegistry | None = None,
     character: Character | None = None,
+    context_builder=None,
 ):
     settings = settings or load_settings()
     active_character = character or load_character(settings.character_path)
@@ -147,9 +149,15 @@ def build_graph(
             raise ValueError("Input source does not match the configured user")
         # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
         # 防止上一轮对某个工具的批准被错误复用于下一轮调用。
+        memory_context = {}
+        if context_builder is not None:
+            recent = recent_history(state.messages, settings.memory_history_tokens)
+            memory_context = context_references(context_builder.build(state.question, [
+                {"role": m.type, "content": m.content} for m in recent]))
         return {
             "input_source": source.model_dump(mode="json"),
-            "memory_prompt": memory_service.format_for_prompt(),
+            "memory_prompt": memory_service.format_for_prompt() if context_builder is None else "",
+            "memory_context": memory_context,
             "tool_messages": [],
             "tool_call_count": 0,
             "tool_events": [],
@@ -164,13 +172,7 @@ def build_graph(
         tool_messages = state.tool_messages or [
             SourceMessage.model_validate(state.input_source).to_message()
         ]
-        conversation = [
-            SystemMessage(
-                content=_build_system_prompt(active_character, state.memory_prompt)
-            ),
-            *state.messages,
-            *tool_messages,
-        ]
+        conversation = build_request(state, tool_messages, project_tools)
 
         response = tool_llm.invoke(conversation)
         return {"tool_messages": [*tool_messages, response]}
@@ -249,17 +251,22 @@ def build_graph(
             "tool_review_approved": None,
         }
 
+    def build_request(state, current, tools):
+        if context_builder is None:
+            return [SystemMessage(content=_build_system_prompt(active_character, state.memory_prompt)), *state.messages, *current]
+        conversation, diagnostics = assemble_request(_build_system_prompt(active_character, ""), state.messages,
+            current, state.memory_context, memory_service, tools, settings)
+        if diagnostics:
+            logger.info("Memory context diagnostics: %s", diagnostics)
+        return conversation
+
     def generate_limit_reply(state: ChatState):
-        conversation = [
-            SystemMessage(
-                content=_build_system_prompt(active_character, state.memory_prompt)
-            ),
-            *state.messages,
-            *state.tool_messages,
-            SystemMessage(content=TOOL_LIMIT_PROMPT),
-        ]
+        pending = state.tool_messages[-1].tool_calls
+        completed = [*state.tool_messages, *[ToolMessage(content="[tool_limit] 本轮工具调用已达上限，未执行。",
+            tool_call_id=call["id"], name=call["name"], status="error") for call in pending]]
+        conversation = build_request(state, [*completed, SystemMessage(content=TOOL_LIMIT_PROMPT)], [])
         response = llm.invoke(conversation)
-        return {"tool_messages": [*state.tool_messages, response]}
+        return {"tool_messages": [*completed, response]}
 
     def finalize_reply(state: ChatState):
         if not state.tool_messages:

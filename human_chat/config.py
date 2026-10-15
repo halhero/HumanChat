@@ -35,6 +35,8 @@ class Settings(BaseModel):
     llm_model: str = "qwen3.5-flash"
     llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     llm_timeout_seconds: float = Field(default=60, ge=1, le=600)
+    chat_context_tokens: int = Field(default=32000, ge=4000, le=1000000)
+    chat_output_tokens: int = Field(default=2048, ge=256, le=32000)
     stt_provider: Literal["dashscope", "openai"] = "dashscope"
     stt_model: str = "qwen3-asr-flash"
     stt_base_url: str = ""
@@ -95,6 +97,8 @@ _ENV_OVERRIDES = (
     ("llm_model", "HUMANCHAT_LLM_MODEL", str),
     ("llm_base_url", "HUMANCHAT_LLM_BASE_URL", str),
     ("llm_timeout_seconds", "HUMANCHAT_LLM_TIMEOUT_SECONDS", float),
+    ("chat_context_tokens", "HUMANCHAT_CHAT_CONTEXT_TOKENS", int),
+    ("chat_output_tokens", "HUMANCHAT_CHAT_OUTPUT_TOKENS", int),
     ("stt_provider", "HUMANCHAT_STT_PROVIDER", str),
     ("stt_model", "HUMANCHAT_STT_MODEL", str),
     ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),

@@ -12,5 +12,6 @@ def create_chat_model(settings: Settings) -> ChatOpenAI:
         api_key=settings.openai_api_key,
         base_url=settings.llm_base_url,
         timeout=settings.llm_timeout_seconds,
+        max_tokens=settings.chat_output_tokens,
     )
 

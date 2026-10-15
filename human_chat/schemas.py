@@ -19,4 +19,5 @@ class ChatState(BaseModel):
     memory_review_request: dict[str, Any] | None = None
     memory_saved_count: int = 0
     memory_prompt: str = ""
+    memory_context: dict[str, Any] = Field(default_factory=dict)
     assistant_text: str = ""
