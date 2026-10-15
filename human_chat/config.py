@@ -53,6 +53,7 @@ class Settings(BaseModel):
     memory_embedding_model: str = "text-embedding-v4"
     memory_embedding_base_url: str = ""
     memory_embedding_api_key: str = ""
+    memory_semantic_enabled: bool = True
     memory_user_id: str = "default"
     memory_backend: str = "json"
     memory_postgres_uri: str = ""
@@ -116,6 +117,7 @@ _ENV_OVERRIDES = (
     ("memory_embedding_model", "HUMANCHAT_MEMORY_EMBEDDING_MODEL", str),
     ("memory_embedding_base_url", "HUMANCHAT_MEMORY_EMBEDDING_BASE_URL", str),
     ("memory_embedding_api_key", "HUMANCHAT_MEMORY_EMBEDDING_API_KEY", str),
+    ("memory_semantic_enabled", "HUMANCHAT_MEMORY_SEMANTIC_ENABLED", _parse_bool),
     ("memory_backend", "HUMANCHAT_MEMORY_BACKEND", str),
     ("memory_postgres_uri", "HUMANCHAT_MEMORY_POSTGRES_URI", str),
     ("checkpoint_backend", "HUMANCHAT_CHECKPOINT_BACKEND", str),

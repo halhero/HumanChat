@@ -24,10 +24,9 @@ export interface ReviewItem {
 }
 
 export interface ReviewRequest {
-  kind: "tool" | "memory";
+  kind: "tool";
   title: string;
   description: string;
-  selectable: boolean;
   items: ReviewItem[];
 }
 

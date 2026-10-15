@@ -52,11 +52,11 @@ def test_delete_uses_stable_memory_id():
     assert service.delete_by_id(second.id) is None
 
 
-def test_format_for_prompt_uses_repository_items():
+def test_load_returns_repository_items_without_prompt_formatting():
     service, _ = create_service()
 
-    assert service.format_for_prompt() == "暂无长期记忆。"
+    assert service.load().items == []
 
     service.add("用户正在开发 HumanChat。")
 
-    assert service.format_for_prompt() == "长期记忆：\n- 用户正在开发 HumanChat。"
+    assert [item.text for item in service.load().items] == ["用户正在开发 HumanChat。"]

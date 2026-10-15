@@ -15,7 +15,14 @@ from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
 from human_chat.memory.resources import MemoryResource, open_memory_resource
 from human_chat.memory.models import MemoryItem
-from human_chat.messages import new_source
+from human_chat.memory.context import MemoryContextBuilder
+from human_chat.memory.formation import MemoryFormation
+from human_chat.memory.jobs import MemoryJobs, MemoryWorker
+from human_chat.memory.repository import default_memory_namespace, memory_path_for_namespace
+from human_chat.memory.request import recent_history
+from human_chat.memory.retrieval import MemoryRetriever
+from human_chat.llm import create_chat_model
+from human_chat.messages import SourceBatch, history_sources, new_source
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -91,6 +98,57 @@ class HumanChatApplication:
         self._memory = memory
         self._tool_registry = tool_registry
         self._voice = voice
+        self._memory_worker = None
+        self._memory_jobs = None
+
+    def start_memory_worker(self, formation):
+        path = memory_path_for_namespace(self._settings.memory_path, default_memory_namespace(self._settings)).with_suffix(".jobs.sqlite")
+        self._memory_jobs = MemoryJobs(path if self._checkpoint.persistent else None)
+        self._memory.service.on_delete(self._memory_jobs.forget)
+        self._memory_worker = MemoryWorker(self._memory_jobs, formation, self._memory.service,
+                                           self._load_memory_source, self._memory.index)
+        # Reconcile completed checkpoint sources before starting the worker. This closes
+        # the gap between a Graph commit and registration in the separate job database.
+        for session in self._sessions.list_recent(limit=2**31 - 1):
+            snapshot = self._graph.get_state(self._graph_config(session.thread_id))
+            if any(p.value.get("type") == "memory_review" for p in snapshot.interrupts if isinstance(p.value, dict)):
+                self.discard_pending_turn(session.id)
+                snapshot = self._graph.get_state(self._graph_config(session.thread_id))
+            self._enqueue_memory_sources(session, snapshot, all_completed=True)
+        self._memory_worker.start()
+
+    def close_memory_worker(self):
+        if self._memory_worker:
+            self._memory_worker.close()
+        self._memory.service.on_delete(None)
+        if self._memory_jobs:
+            self._memory_jobs.close()
+
+    def _enqueue_memory_sources(self, session, snapshot, *, all_completed=False):
+        if self._memory_jobs is None or not self._settings.memory_extraction_enabled or not snapshot.values:
+            return
+        messages = snapshot.values.get("messages", [])
+        sources = history_sources(messages, user_id=self._settings.memory_user_id, session_id=session.id)
+        checkpoint_id = snapshot.config["configurable"].get("checkpoint_id")
+        if checkpoint_id is None:
+            return
+        for index, source in enumerate(sources[:-1]):
+            if not all_completed and source.id != snapshot.values.get("input_source", {}).get("id"):
+                continue
+            if source.role == "user" and source.occurred_at and sources[index + 1].role == "assistant":
+                self._memory_jobs.enqueue(user_id=source.user_id, thread_id=session.thread_id,
+                    checkpoint_id=checkpoint_id, source_id=source.id, source_time=source.occurred_at)
+        self._memory_worker.notify()
+
+    def _load_memory_source(self, job):
+        snapshot = self._graph.get_state({"configurable": {"thread_id": job["thread_id"], "checkpoint_id": job["checkpoint_id"]}})
+        messages = snapshot.values.get("messages", [])
+        sources = history_sources(messages, user_id=job["user_id"], session_id=job["thread_id"])
+        position = next(i for i, source in enumerate(sources) if source.id == job["source_id"])
+        previous = recent_history([source.to_message() for source in sources[:position]], self._settings.memory_history_tokens)
+        context_ids = {message.id for message in previous}
+        return SourceBatch(user_id=job["user_id"], new_messages=[sources[position]],
+                           context_messages=[source for source in sources[:position] if source.id in context_ids])
 
     def status(self) -> ApplicationStatus:
         return ApplicationStatus(
@@ -195,6 +253,9 @@ class HumanChatApplication:
         snapshot = self._graph.get_state(self._graph_config(session.thread_id))
         for pending in snapshot.interrupts:
             if isinstance(pending.value, dict):
+                if pending.value.get("type") == "memory_review":
+                    self.discard_pending_turn(session_id)
+                    return None
                 return pending.value
         return None
 
@@ -214,10 +275,9 @@ class HumanChatApplication:
                     "tool_messages": [],
                     "tool_review_request": None,
                     "tool_review_approved": None,
-                    "memory_review_request": None,
-                    "memory_saved_count": 0,
+                    "memory_context": {},
                 },
-                as_node="review_memory",
+                as_node="finish_turn",
             )
 
     def stream_turn(
@@ -275,6 +335,8 @@ class HumanChatApplication:
                 if mode == "values" and isinstance(data, dict):
                     latest_state = data
                 yield mode, data
+            snapshot = self._graph.get_state(self._graph_config(session.thread_id))
+            self._enqueue_memory_sources(session, snapshot)
         finally:
             if latest_state:
                 self._save_session_state(
@@ -346,14 +408,17 @@ def open_human_chat_application(
         with open_memory_resource(settings) as memory:
             with open_tool_registry(settings) as tool_registry:
                 with open_voice_resource(settings, character) as voice:
+                    retriever = MemoryRetriever(memory.service, memory.index)
+                    memory_llm = create_chat_model(settings)
                     graph = build_graph(
                         settings,
                         checkpointer=checkpoint.saver,
                         memory_service=memory.service,
                         tool_registry=tool_registry,
                         character=character,
+                        context_builder=MemoryContextBuilder(retriever, memory_llm, settings),
                     )
-                    yield HumanChatApplication(
+                    application = HumanChatApplication(
                         settings=settings,
                         graph=graph,
                         session_repository=repository,
@@ -362,6 +427,13 @@ def open_human_chat_application(
                         tool_registry=tool_registry,
                         voice=voice,
                     )
+                    try:
+                        if settings.memory_extraction_enabled or memory.index is not None:
+                            formation = MemoryFormation(memory.service, memory_llm, settings, retriever)
+                            application.start_memory_worker(formation if settings.memory_extraction_enabled else None)
+                        yield application
+                    finally:
+                        application.close_memory_worker()
 
 
 def _message_text(message) -> str:

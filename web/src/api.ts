@@ -150,14 +150,13 @@ export function startTurn(
 export function resumeTurn(
   turnId: string,
   decision: "approve" | "reject",
-  selectedItemIds: string[],
   onOpen: (activeTurnId: string) => void,
   onEvent: (event: ConversationEvent) => void,
   signal?: AbortSignal,
 ) {
   return streamRequest(
     `/turns/${encodeURIComponent(turnId)}/decision`,
-    { decision, selected_item_ids: selectedItemIds },
+    { decision },
     onOpen,
     onEvent,
     signal,

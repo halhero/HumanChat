@@ -60,7 +60,6 @@ class StartTurnRequest(BaseModel):
 
 class ReviewDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
-    selected_item_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class TurnStatusResponse(BaseModel):

@@ -87,7 +87,6 @@ async def decide_turn(
         stream = await conversations.resume_turn(
             turn_id,
             decision=payload.decision,
-            selected_item_ids=payload.selected_item_ids,
         )
     except TurnNotFoundError as exc:
         raise ApiError(404, "turn_not_found", str(exc)) from exc

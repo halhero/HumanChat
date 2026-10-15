@@ -37,9 +37,6 @@ export default function App() {
   const [progress, setProgress] = useState<string | null>(null);
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewRequest | null>(null);
-  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(
-    new Set(),
-  );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +99,6 @@ export default function App() {
       if (turn.status === "awaiting_review" && turn.review) {
         setCurrentTurnId(turn.id);
         setReview(turn.review);
-        setSelectedReviewIds(defaultSelection(turn.review));
         return;
       }
       if (turn.status === "running" || turn.status === "cancelling") {
@@ -224,13 +220,9 @@ export default function App() {
         }
         break;
       }
-      case "memory.saved":
-        setProgress(`已保存 ${String(event.data.count)} 条长期记忆`);
-        break;
       case "review.required": {
         const nextReview = event.data as unknown as ReviewRequest;
         setReview(nextReview);
-        setSelectedReviewIds(defaultSelection(nextReview));
         setProgress(null);
         break;
       }
@@ -342,33 +334,16 @@ export default function App() {
     if (!turnId || !sessionId || !review || busy) {
       return;
     }
-    const selectedIds =
-      decision === "approve" && review.selectable
-        ? [...selectedReviewIds]
-        : [];
     await runStream((signal) =>
       resumeTurn(
         turnId,
         decision,
-        selectedIds,
         (activeTurnId) => rememberTurn(activeTurnId),
         handleConversationEvent,
         signal,
       ),
       sessionId,
     );
-  };
-
-  const toggleReviewItem = (itemId: string) => {
-    setSelectedReviewIds((current) => {
-      const next = new Set(current);
-      if (next.has(itemId)) {
-        next.delete(itemId);
-      } else {
-        next.add(itemId);
-      }
-      return next;
-    });
   };
 
   return (
@@ -431,9 +406,7 @@ export default function App() {
       {review && (
         <ReviewDialog
           review={review}
-          selectedIds={selectedReviewIds}
           submitting={busy}
-          onToggle={toggleReviewItem}
           onApprove={() => void submitReview("approve")}
           onReject={() => void submitReview("reject")}
         />
@@ -447,12 +420,6 @@ export default function App() {
       )}
     </div>
   );
-}
-
-function defaultSelection(review: ReviewRequest): Set<string> {
-  return review.selectable
-    ? new Set(review.items.map((item) => item.id))
-    : new Set();
 }
 
 function errorMessage(reason: unknown): string {

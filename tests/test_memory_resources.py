@@ -3,7 +3,7 @@ from human_chat.memory.resources import open_memory_resource
 
 
 def test_json_memory_resource_is_persistent(tmp_path):
-    settings = Settings(memory_path=tmp_path / "memory.json", memory_backend="json")
+    settings = Settings(memory_path=tmp_path / "memory.json", memory_backend="json", memory_semantic_enabled=False)
 
     with open_memory_resource(settings) as resource:
         assert resource.backend == "json"
@@ -12,7 +12,7 @@ def test_json_memory_resource_is_persistent(tmp_path):
 
 
 def test_memory_store_resource_uses_langgraph_store(tmp_path):
-    settings = Settings(memory_path=tmp_path / "memory.json", memory_backend="memory")
+    settings = Settings(memory_path=tmp_path / "memory.json", memory_backend="memory", memory_semantic_enabled=False)
 
     with open_memory_resource(settings) as resource:
         assert resource.backend == "memory"

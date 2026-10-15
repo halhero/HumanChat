@@ -33,9 +33,6 @@ class MemoryService(Protocol):
     def delete_by_id(self, item_id: str) -> MemoryItem | None:
         ...
 
-    def format_for_prompt(self) -> str:
-        ...
-
 
 class LongTermMemoryService:
     def __init__(
@@ -130,12 +127,6 @@ class LongTermMemoryService:
             "suppressed": sorted(hashes), "deleted_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
-
-    def format_for_prompt(self) -> str:
-        items = [item.text for item in self.load().items]
-        if not items:
-            return "暂无长期记忆。"
-        return "\n".join(["长期记忆：", *[f"- {item}" for item in items]])
 
     def apply(self, mutation: Mutation) -> MutationResult:
         """One logical record, its history and receipt commit in one storage write."""

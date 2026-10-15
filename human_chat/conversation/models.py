@@ -57,9 +57,8 @@ class ConversationEvent:
 
 @dataclass(frozen=True)
 class PendingReview:
-    kind: Literal["tool", "memory"]
+    kind: Literal["tool"]
     public_payload: dict[str, Any]
-    memory_items: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

@@ -24,7 +24,6 @@ from human_chat.conversation.models import (
     TurnStatus,
 )
 from human_chat.conversation.protocol import (
-    build_resume_value,
     create_pending_review,
     extract_interrupt_payloads,
     progress_event,
@@ -86,17 +85,12 @@ class ConversationService:
         turn_id: str,
         *,
         decision: Literal["approve", "reject"],
-        selected_item_ids: list[str],
     ) -> ConversationStream:
         async with self._lock:
             turn = self._require_turn(turn_id)
             if turn.status != TurnStatus.AWAITING_REVIEW or turn.pending_review is None:
                 raise TurnStateError("该对话当前不在等待确认。")
-            resume_value = build_resume_value(
-                turn.pending_review,
-                decision=decision,
-                selected_item_ids=selected_item_ids,
-            )
+            resume_value = {"approved": decision == "approve"}
             turn.status = TurnStatus.RUNNING
             turn.pending_review = None
             turn.updated_at = now_local()
@@ -351,13 +345,6 @@ class ConversationService:
                                     "content": update["assistant_text"],
                                 }
                             },
-                        )
-                    )
-                if update.get("memory_saved_count"):
-                    emit(
-                        ConversationEvent(
-                            "memory.saved",
-                            {"count": update["memory_saved_count"]},
                         )
                     )
         return review

@@ -7,15 +7,29 @@ from human_chat.memory.repository import (
     JsonMemoryRepository,
     LangGraphMemoryRepository,
     default_memory_namespace,
+    memory_path_for_namespace,
 )
-from human_chat.memory.service import LongTermMemoryService, MemoryService
+from human_chat.memory.service import LongTermMemoryService
+from human_chat.memory.index import MemoryIndex, create_embeddings
 
 
 @dataclass(frozen=True)
 class MemoryResource:
-    service: MemoryService
+    service: LongTermMemoryService
     backend: str
     persistent: bool
+    index: MemoryIndex | None = None
+
+
+def _resource(settings, repository, namespace, backend, persistent):
+    service = LongTermMemoryService(repository, namespace)
+    index = None
+    if settings.memory_semantic_enabled:
+        path = memory_path_for_namespace(settings.memory_path, namespace).with_suffix(".index.json") if persistent else None
+        configuration = f"{settings.memory_embedding_base_url or settings.llm_base_url}|{settings.memory_embedding_model}"
+        index = MemoryIndex(create_embeddings(settings), path, configuration)
+        service.attach_index(index)
+    return MemoryResource(service, backend, persistent, index)
 
 
 @contextmanager
@@ -28,11 +42,7 @@ def open_memory_resource(
 
     if selected_backend == "json":
         repository = JsonMemoryRepository(settings.memory_path)
-        yield MemoryResource(
-            service=LongTermMemoryService(repository, namespace),
-            backend="json",
-            persistent=True,
-        )
+        yield _resource(settings, repository, namespace, "json", True)
         return
 
     if selected_backend == "memory":
@@ -40,11 +50,7 @@ def open_memory_resource(
 
         store = InMemoryStore()
         repository = LangGraphMemoryRepository(store)
-        yield MemoryResource(
-            service=LongTermMemoryService(repository, namespace),
-            backend="memory",
-            persistent=False,
-        )
+        yield _resource(settings, repository, namespace, "memory", False)
         return
 
     if selected_backend == "postgres":
@@ -62,11 +68,7 @@ def open_memory_resource(
         with PostgresStore.from_conn_string(settings.memory_postgres_uri) as store:
             store.setup()
             repository = LangGraphMemoryRepository(store)
-            yield MemoryResource(
-                service=LongTermMemoryService(repository, namespace),
-                backend="postgres",
-                persistent=True,
-            )
+            yield _resource(settings, repository, namespace, "postgres", True)
         return
 
     raise ValueError(f"不支持的长期记忆后端：{selected_backend}")

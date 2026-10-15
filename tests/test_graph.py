@@ -1,4 +1,7 @@
 import asyncio
+import time
+from contextlib import nullcontext
+from threading import Event
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -7,9 +10,18 @@ from langchain_core.tools import tool
 import human_chat.graph as graph_module
 from human_chat.config import Settings
 from human_chat.tool_provider import RegisteredTool, ToolRegistry
+from human_chat.tool_provider import ToolPolicy
 from human_chat.application import open_human_chat_application
 from human_chat.conversation import ConversationService, SessionBusyError
-from human_chat.memory_review import MemoryCandidate
+from human_chat.memory.context import Applicability, ContextAssessment, MemoryContextBuilder
+from human_chat.memory.formation import FormationPlan, MemoryFormation
+from human_chat.memory.models import Assertion, Evidence, Mutation
+from human_chat.memory.repository import LangGraphMemoryRepository
+from human_chat.memory.retrieval import MemoryRetriever
+from human_chat.memory.service import LongTermMemoryService
+from langgraph.store.memory import InMemoryStore
+from tests.test_memory_context import AssessmentModel
+import human_chat.application as application_module
 
 
 class FakeChatModel:
@@ -27,14 +39,6 @@ class FakeChatModel:
         return self._responses.pop(0)
 
 
-class FakeMemoryService:
-    def format_for_prompt(self) -> str:
-        return "长期记忆：\n- 用户希望理解修改原因"
-
-    def add(self, text: str, source: str = "manual", confidence=None) -> bool:
-        return True
-
-
 @tool("lookup_context")
 def lookup_context(value: str) -> str:
     """Return test project context."""
@@ -43,9 +47,14 @@ def lookup_context(value: str) -> str:
 
 def _build_test_graph(monkeypatch, model, registry=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
+    service = LongTermMemoryService(LangGraphMemoryRepository(InMemoryStore()), ("users", "default", "memory"))
+    item = service.add("用户希望理解修改原因")
+    selector = AssessmentModel(ContextAssessment(task="讲解", memories=[Applicability(id=f"{item.id}@1",
+        purpose="guidance", decision="needed", reason="适用")]))
     return graph_module.build_graph(
         Settings(memory_extraction_enabled=False),
-        memory_service=FakeMemoryService(),
+        memory_service=service,
+        context_builder=MemoryContextBuilder(MemoryRetriever(service), selector, Settings()),
         tool_registry=registry or ToolRegistry([]),
     )
 
@@ -92,29 +101,49 @@ def test_tool_result_stays_in_same_model_conversation(monkeypatch):
     assert result["tool_events"][0]["status"] == "success"
 
 
-def test_memory_review_recovers_after_service_restart(monkeypatch, tmp_path):
+def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, tmp_path):
     monkeypatch.setattr(
         graph_module, "create_chat_model",
         lambda settings: FakeChatModel([AIMessage(content="reply")]),
     )
-    monkeypatch.setattr(
-        graph_module, "extract_memory_candidates",
-        lambda *args: [MemoryCandidate(text="approved memory")],
-    )
+    entered, release = Event(), Event()
+
+    def prepare(self, batch, job_id):
+        entered.set()
+        assert release.wait(5)
+        source = batch.new_messages[0]
+        return FormationPlan(operations=[Mutation(id=job_id, user_id="default", kind="add", text="用户喜欢Python",
+            assertion=Assertion(subject="user:default", relation="喜欢", value="Python"),
+            evidence=[Evidence(message_id=source.id, user_id="default", session_id=source.session_id,
+                               message_time=source.occurred_at, quote=source.content)])])
+
+    monkeypatch.setattr(MemoryFormation, "prepare", prepare)
     settings = Settings(
         openai_api_key="validation-placeholder",
         session_dir=tmp_path / "sessions",
         memory_path=tmp_path / "memory.json",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
+        memory_semantic_enabled=False,
     )
 
     async def run():
         with open_human_chat_application(settings) as application:
             first = ConversationService(application)
             session = application.create_session()
-            stream = await first.start_turn(session.id, "question")
+            stream = await first.start_turn(session.id, "我喜欢Python")
             events = [event async for event in first.iter_events(stream)]
-            assert events[-1].type == "review.required"
+            try:
+                assert events[-1].type == "turn.completed"
+                assert not any("memory" in event.type or event.type == "review.required" for event in events)
+                assert await asyncio.to_thread(entered.wait, 2)
+                assert application.list_memories() == []
+                assert await first.get_session_turn(session.id) is None
+            finally:
+                release.set()
+            deadline = time.monotonic() + 3
+            while not application.list_memories() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert len(application.list_memories()) == 1
             emitted_id = next(
                 event.data["message"]["id"]
                 for event in events if event.type == "message.completed"
@@ -124,36 +153,29 @@ def test_memory_review_recovers_after_service_restart(monkeypatch, tmp_path):
 
         with open_human_chat_application(settings) as application:
             recovered = ConversationService(application)
-            turn = await recovered.get_session_turn(session.id)
-            assert turn is not None and turn.status == "awaiting_review"
-            with pytest.raises(SessionBusyError):
-                await recovered.start_turn(session.id, "must not overwrite approval")
-            phase = await recovered.resume_turn(
-                turn.id, decision="approve", selected_item_ids=["memory-0"]
-            )
-            events = [event async for event in recovered.iter_events(phase)]
-            assert events[-1].type == "turn.completed"
-            assert [item.text for item in application.list_memories()] == ["approved memory"]
+            assert len(application.list_memories()) == 1
+            assert application._memory_jobs.next() is None
             assert await recovered.get_session_turn(session.id) is None
             await recovered.shutdown()
 
     asyncio.run(run())
 
 
-def test_cancelled_review_does_not_return_from_checkpoint(monkeypatch, tmp_path):
+def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_path):
     monkeypatch.setattr(
         graph_module, "create_chat_model",
-        lambda settings: FakeChatModel([AIMessage(content="reply")]),
+        lambda settings: FakeChatModel([AIMessage(content="", tool_calls=[
+            {"name": "lookup_context", "args": {"value": "test"}, "id": "protected-1", "type": "tool_call"}])]),
     )
-    monkeypatch.setattr(
-        graph_module, "extract_memory_candidates",
-        lambda *args: [MemoryCandidate(text="must not save")],
-    )
+    registry = ToolRegistry([RegisteredTool(tool=lookup_context, source="test", policy=ToolPolicy(requires_confirmation=True))])
+    monkeypatch.setattr(application_module, "open_tool_registry", lambda settings: nullcontext(registry))
     settings = Settings(
         openai_api_key="validation-placeholder",
         session_dir=tmp_path / "sessions",
         memory_path=tmp_path / "memory.json",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
+        memory_extraction_enabled=False,
+        memory_semantic_enabled=False,
     )
 
     async def run():
@@ -161,11 +183,12 @@ def test_cancelled_review_does_not_return_from_checkpoint(monkeypatch, tmp_path)
             service = ConversationService(application)
             session = application.create_session()
             stream = await service.start_turn(session.id, "question")
-            _ = [event async for event in service.iter_events(stream)]
+            events = [event async for event in service.iter_events(stream)]
+            assert events[-1].type == "review.required" and events[-1].data["kind"] == "tool"
             assert await service.cancel_turn(stream.turn_id) == "cancelled"
             assert application.get_pending_review(session.id) is None
             assert application.list_memories() == []
-            assert len(application.get_session_with_messages(session.id)[1]) == 2
+            assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)
             assert await fresh_service.get_session_turn(session.id) is None
             await service.shutdown()
@@ -186,6 +209,7 @@ def test_failed_model_turn_releases_session_for_retry(monkeypatch, tmp_path):
     settings = Settings(
         openai_api_key="validation-placeholder",
         memory_extraction_enabled=False,
+        memory_semantic_enabled=False,
         session_dir=tmp_path / "sessions",
         memory_path=tmp_path / "memory.json",
         checkpoint_path=tmp_path / "checkpoint.sqlite",

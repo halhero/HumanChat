@@ -710,20 +710,6 @@ input:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.review-item--selectable {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: start;
-  cursor: pointer;
-}
-
-.review-item--selectable input {
-  width: 16px;
-  height: 16px;
-  margin: 2px 0 0;
-  accent-color: #276f52;
-}
-
 .review-dialog__actions {
   display: flex;
   justify-content: flex-end;

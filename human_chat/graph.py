@@ -9,12 +9,6 @@ from human_chat.character import Character, load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
-from human_chat.memory_extractor import extract_memory_candidates
-from human_chat.memory_review import (
-    create_memory_review_request,
-    parse_memory_review_decision,
-    parse_memory_review_request,
-)
 from human_chat.memory.service import MemoryService
 from human_chat.memory.request import assemble_request, context_references, recent_history
 from human_chat.messages import SourceMessage, new_source
@@ -47,11 +41,9 @@ TOOL_LIMIT_PROMPT = """
 MAX_TOOL_CALL_ROUNDS = 3
 
 
-def _build_system_prompt(character, memory_prompt: str) -> str:
+def _build_system_prompt(character) -> str:
     return (
         f"{character.system_prompt}\n"
-        f"以下是你应该长期记住的用户和项目背景：\n"
-        f"{memory_prompt}\n"
         f"请使用角色配置指定的语言回复：{character.reply_language}。\n"
         f"{TOOL_CALLING_PROMPT}"
     )
@@ -125,10 +117,10 @@ def build_graph(
     settings: Settings | None = None,
     *,
     memory_service: MemoryService,
+    context_builder,
     checkpointer=None,
     tool_registry: ToolRegistry | None = None,
     character: Character | None = None,
-    context_builder=None,
 ):
     settings = settings or load_settings()
     active_character = character or load_character(settings.character_path)
@@ -149,14 +141,11 @@ def build_graph(
             raise ValueError("Input source does not match the configured user")
         # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
         # 防止上一轮对某个工具的批准被错误复用于下一轮调用。
-        memory_context = {}
-        if context_builder is not None:
-            recent = recent_history(state.messages, settings.memory_history_tokens)
-            memory_context = context_references(context_builder.build(state.question, [
-                {"role": m.type, "content": m.content} for m in recent]))
+        recent = recent_history(state.messages, settings.memory_history_tokens)
+        memory_context = context_references(context_builder.build(state.question, [
+            {"role": m.type, "content": m.content} for m in recent]))
         return {
             "input_source": source.model_dump(mode="json"),
-            "memory_prompt": memory_service.format_for_prompt() if context_builder is None else "",
             "memory_context": memory_context,
             "tool_messages": [],
             "tool_call_count": 0,
@@ -164,8 +153,7 @@ def build_graph(
             "tool_limit_reached": False,
             "tool_review_request": None,
             "tool_review_approved": None,
-            "memory_review_request": None,
-            "memory_saved_count": 0,
+            "assistant_text": "",
         }
 
     def call_agent_model(state: ChatState):
@@ -252,9 +240,7 @@ def build_graph(
         }
 
     def build_request(state, current, tools):
-        if context_builder is None:
-            return [SystemMessage(content=_build_system_prompt(active_character, state.memory_prompt)), *state.messages, *current]
-        conversation, diagnostics = assemble_request(_build_system_prompt(active_character, ""), state.messages,
+        conversation, diagnostics = assemble_request(_build_system_prompt(active_character), state.messages,
             current, state.memory_context, memory_service, tools, settings)
         if diagnostics:
             logger.info("Memory context diagnostics: %s", diagnostics)
@@ -287,40 +273,8 @@ def build_graph(
             ],
         }
 
-    def extract_memory(state: ChatState):
-        if not settings.memory_extraction_enabled or not state.assistant_text:
-            return {"memory_review_request": None}
-
-        try:
-            candidates = extract_memory_candidates(llm, state.question, state.assistant_text)
-        except Exception:
-            logger.exception("Failed to extract memory candidates")
-            return {"memory_review_request": None}
-
-        review_request = create_memory_review_request(candidates)
-        if not review_request.candidates:
-            return {"memory_review_request": None}
-        return {"memory_review_request": _model_to_dict(review_request)}
-
-    def review_memory(state: ChatState):
-        review_request = parse_memory_review_request(state.memory_review_request)
-        if not review_request.candidates:
-            return {"memory_saved_count": 0}
-
-        decision_data = interrupt(
-            {
-                "type": "memory_review",
-                "request": _model_to_dict(review_request),
-            }
-        )
-        decision = parse_memory_review_decision(decision_data)
-        saved_count = 0
-
-        for text in decision.accepted_texts:
-            if memory_service.add(text, source="extracted_confirmed"):
-                saved_count += 1
-
-        return {"memory_saved_count": saved_count}
+    def finish_turn(state: ChatState):
+        return {}
 
     def mark_tool_limit_reached(state: ChatState):
         return {
@@ -368,8 +322,7 @@ def build_graph(
     workflow.add_node("reject_tool_calls", reject_tool_calls)
     workflow.add_node("generate_limit_reply", generate_limit_reply)
     workflow.add_node("finalize_reply", finalize_reply)
-    workflow.add_node("extract_memory", extract_memory)
-    workflow.add_node("review_memory", review_memory)
+    workflow.add_node("finish_turn", finish_turn)
     workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
     workflow.add_edge(START, "prepare_context")
     workflow.add_edge("prepare_context", "call_agent_model")
@@ -397,13 +350,10 @@ def build_graph(
     workflow.add_edge("reject_tool_calls", "call_agent_model")
     workflow.add_edge("mark_tool_limit_reached", "generate_limit_reply")
     workflow.add_edge("generate_limit_reply", "finalize_reply")
-    workflow.add_edge("finalize_reply", "extract_memory")
-    workflow.add_edge("extract_memory", "review_memory")
-    workflow.add_edge("review_memory", END)
+    workflow.add_edge("finalize_reply", "finish_turn")
+    workflow.add_edge("finish_turn", END)
     return workflow.compile(checkpointer=checkpointer)
 
 
 def _model_to_dict(model) -> dict:
-    if hasattr(model, "model_dump"):
-        return model.model_dump()
-    return model.dict()
+    return model.model_dump()
