@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 class ChatState(BaseModel):
     question: str = Field(description="User question.")
+    input_source: dict[str, Any] | None = None
     messages: Annotated[list[Any], add_messages] = Field(default_factory=list)
     tool_messages: list[Any] = Field(default_factory=list)
     tool_call_count: int = 0

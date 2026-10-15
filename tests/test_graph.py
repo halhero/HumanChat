@@ -61,6 +61,8 @@ def test_direct_reply_reuses_first_model_response(monkeypatch):
     assert isinstance(model.calls[0][0], SystemMessage)
     assert isinstance(model.calls[0][-1], HumanMessage)
     assert "用户希望理解修改原因" in model.calls[0][0].content
+    assert model.calls[0][-1].id == result["messages"][0].id
+    assert result["messages"][0].additional_kwargs["human_chat_source"]["occurred_at"]
 
 
 def test_tool_result_stays_in_same_model_conversation(monkeypatch):

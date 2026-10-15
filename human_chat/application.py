@@ -15,6 +15,7 @@ from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
 from human_chat.memory_resources import MemoryResource, open_memory_resource
 from human_chat.memory_models import MemoryItem
+from human_chat.messages import new_source
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -229,7 +230,9 @@ class HumanChatApplication:
         session = self.get_session(session_id)
         yield from self._stream_graph(
             session,
-            {"question": question},
+            {"question": question, "input_source": new_source(
+                question, user_id=self._settings.memory_user_id, session_id=session.id,
+            ).model_dump(mode="json")},
             control=control,
             question=question,
         )

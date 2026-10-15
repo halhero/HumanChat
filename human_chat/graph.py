@@ -1,6 +1,6 @@
-from uuid import uuid4
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
@@ -16,6 +16,7 @@ from human_chat.memory_review import (
     parse_memory_review_request,
 )
 from human_chat.memory_service import MemoryService
+from human_chat.messages import SourceMessage, new_source
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
 from human_chat.tool_review import (
@@ -137,10 +138,17 @@ def build_graph(
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
 
-    def prepare_context(state: ChatState):
+    def prepare_context(state: ChatState, config: RunnableConfig):
+        source = SourceMessage.model_validate(state.input_source) if state.input_source else None
+        if source is None or source.content != state.question or any(m.id == source.id for m in state.messages):
+            source = new_source(state.question, user_id=settings.memory_user_id,
+                                session_id=str(config.get("configurable", {}).get("thread_id", "standalone")))
+        if source.user_id != settings.memory_user_id or source.role != "user":
+            raise ValueError("Input source does not match the configured user")
         # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
         # 防止上一轮对某个工具的批准被错误复用于下一轮调用。
         return {
+            "input_source": source.model_dump(mode="json"),
             "memory_prompt": memory_service.format_for_prompt(),
             "tool_messages": [],
             "tool_call_count": 0,
@@ -154,7 +162,7 @@ def build_graph(
 
     def call_agent_model(state: ChatState):
         tool_messages = state.tool_messages or [
-            HumanMessage(content=state.question)
+            SourceMessage.model_validate(state.input_source).to_message()
         ]
         conversation = [
             SystemMessage(
@@ -266,8 +274,9 @@ def build_graph(
         return {
             "assistant_text": assistant_text,
             "messages": [
-                HumanMessage(content=state.question, id=uuid4().hex),
-                AIMessage(content=assistant_text, id=uuid4().hex),
+                SourceMessage.model_validate(state.input_source).to_message(),
+                new_source(assistant_text, user_id=settings.memory_user_id,
+                           session_id=state.input_source["session_id"], role="assistant").to_message(),
             ],
         }
 
