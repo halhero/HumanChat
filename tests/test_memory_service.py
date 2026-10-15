@@ -1,4 +1,4 @@
-from human_chat.memory_models import MemoryItem
+from human_chat.memory.models import MemoryItem
 from human_chat.memory_service import LongTermMemoryService
 
 

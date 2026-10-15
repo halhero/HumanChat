@@ -154,7 +154,7 @@ export function MemoryDialog({ onClose, onError }: MemoryDialogProps) {
                   <p>{item.text}</p>
                   <span>
                     {sourceLabel(item.source)} ·{" "}
-                    {dateFormatter.format(new Date(item.created_at))}
+                    {item.created_at ? dateFormatter.format(new Date(item.created_at)) : "时间未知"}
                   </span>
                 </div>
                 <div className="memory-item__actions">

@@ -5,7 +5,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from human_chat.config import Settings
-from human_chat.memory_models import LongTermMemory, MemoryItem, create_default_memory
+from human_chat.memory.models import LongTermMemory, MemoryItem, create_default_memory
 
 
 MemoryNamespace = tuple[str, ...]

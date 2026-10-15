@@ -1,6 +1,6 @@
 from langgraph.store.memory import InMemoryStore
 
-from human_chat.memory_models import MemoryItem
+from human_chat.memory.models import MemoryItem
 from human_chat.memory_repository import (
     JsonMemoryRepository,
     LangGraphMemoryRepository,

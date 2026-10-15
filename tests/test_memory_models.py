@@ -1,4 +1,4 @@
-from human_chat.memory_models import LongTermMemory, create_default_memory
+from human_chat.memory.models import LongTermMemory, create_default_memory
 
 
 def test_long_term_memory_migrates_legacy_categories():

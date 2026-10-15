@@ -109,8 +109,8 @@ class SpeechSynthesisRequest(BaseModel):
 class MemoryItemResponse(BaseModel):
     id: str
     text: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None
+    updated_at: datetime | None
     source: str
     confidence: float | None = None
 

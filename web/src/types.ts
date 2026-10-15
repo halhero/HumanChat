@@ -71,8 +71,8 @@ export interface VoiceCapabilities {
 export interface MemoryItem {
   id: string;
   text: string;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
   source: string;
   confidence: number | null;
 }

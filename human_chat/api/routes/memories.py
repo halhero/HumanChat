@@ -9,7 +9,7 @@ from human_chat.api.models import (
     MemoryItemResponse,
     MemoryListResponse,
 )
-from human_chat.memory_models import MemoryItem
+from human_chat.memory.models import MemoryItem
 
 
 router = APIRouter(prefix="/memories", tags=["memories"])
