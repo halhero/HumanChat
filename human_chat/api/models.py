@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class HealthFeatures(BaseModel):
@@ -59,6 +59,7 @@ class StartTurnRequest(BaseModel):
 
 
 class ReviewDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     decision: Literal["approve", "reject"]
 
 

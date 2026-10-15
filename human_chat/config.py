@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +50,7 @@ class Settings(BaseModel):
     memory_processing_tokens: int = Field(default=16000, ge=2000, le=100000)
     memory_candidate_limit: int = Field(default=8, ge=1, le=30)
     memory_history_tokens: int = Field(default=3000, ge=0, le=16000)
+    memory_output_tokens: int = Field(default=4096, ge=512, le=16000)
     memory_embedding_model: str = "text-embedding-v4"
     memory_embedding_base_url: str = ""
     memory_embedding_api_key: str = ""
@@ -92,6 +93,12 @@ class Settings(BaseModel):
             return min(self.stt_max_audio_bytes, 7 * 1024 * 1024)
         return self.stt_max_audio_bytes
 
+    @model_validator(mode="after")
+    def validate_chat_window(self):
+        if self.chat_output_tokens >= self.chat_context_tokens:
+            raise ValueError("Chat output reserve must be smaller than the total context window")
+        return self
+
 
 _ENV_OVERRIDES = (
     ("openai_api_key", "OPENAI_API_KEY", str),
@@ -114,6 +121,7 @@ _ENV_OVERRIDES = (
     ("memory_processing_tokens", "HUMANCHAT_MEMORY_PROCESSING_TOKENS", int),
     ("memory_candidate_limit", "HUMANCHAT_MEMORY_CANDIDATE_LIMIT", int),
     ("memory_history_tokens", "HUMANCHAT_MEMORY_HISTORY_TOKENS", int),
+    ("memory_output_tokens", "HUMANCHAT_MEMORY_OUTPUT_TOKENS", int),
     ("memory_embedding_model", "HUMANCHAT_MEMORY_EMBEDDING_MODEL", str),
     ("memory_embedding_base_url", "HUMANCHAT_MEMORY_EMBEDDING_BASE_URL", str),
     ("memory_embedding_api_key", "HUMANCHAT_MEMORY_EMBEDDING_API_KEY", str),

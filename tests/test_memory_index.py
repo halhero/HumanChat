@@ -1,6 +1,6 @@
 from langchain_core.embeddings import Embeddings
 
-from human_chat.memory.index import MemoryIndex
+from human_chat.memory.index import MemoryIndex, memory_views
 from human_chat.memory.repository import JsonMemoryRepository
 from human_chat.memory.service import LongTermMemoryService
 
@@ -28,7 +28,9 @@ def test_snapshot_reuse_and_delete_during_slow_sync(tmp_path):
     index = MemoryIndex(embeddings, path, "test")
     service.attach_index(index)
     first = service.add("Only local synthetic content")
+    assert not index.covers(memory_views(service.inventory()))
     assert index.sync(service)
+    assert index.covers(memory_views(service.inventory()))
     reloaded = MemoryIndex(embeddings, path, "test")
     assert reloaded.sync(service) and embeddings.calls == 1
     second = service.add("Must not survive deletion")

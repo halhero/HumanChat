@@ -27,8 +27,12 @@ def payload_tokens(payload):
 
 def structured_call(llm, schema, instruction, payload, budget):
     body = json.dumps(payload, ensure_ascii=False)
-    if text_tokens(instruction + body) + payload_tokens(schema.model_json_schema()) + 128 > budget:
+    schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    prompt = (instruction + "\n只输出一个符合下面JSON Schema的JSON对象，不输出自然语言、null或裸数组。"
+              "无候选时仍输出包含空列表的对象。\nJSON Schema:\n" + schema_json)
+    if text_tokens(prompt + body) + 128 > budget:
         raise MemoryBudgetError("Memory processing input exceeds its configured budget")
-    return llm.with_structured_output(schema, method="function_calling").invoke([
-        SystemMessage(content=instruction), HumanMessage(content=body),
+    result = llm.with_structured_output(schema, method="json_mode").invoke([
+        SystemMessage(content=prompt), HumanMessage(content=body),
     ])
+    return schema.model_validate(result)

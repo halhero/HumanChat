@@ -9,6 +9,9 @@ def test_task_catalog_survives_topical_top_k_and_stale_vectors(tmp_path):
     topic = service.add("Python Python Python")
 
     class StaleIndex:
+        def covers(self, views):
+            return False
+
         def search(self, query, limit):
             return [(f"{guidance.id}@1", 0.99, 99)]
 
@@ -18,6 +21,6 @@ def test_task_catalog_survives_topical_top_k_and_stale_vectors(tmp_path):
     assert "task_background_catalog" in candidates[guidance.id].reasons
     assert "semantic" not in candidates[guidance.id].reasons
     assert "lexical" in candidates[topic.id].reasons
-    assert result.diagnostics == ["semantic_projection_stale"]
+    assert result.diagnostics == ["semantic_projection_incomplete", "semantic_projection_stale"]
     service.delete_by_id(guidance.id)
     assert all(c.view.parent_id != guidance.id for c in retriever.recall("代码审查").candidates)

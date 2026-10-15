@@ -106,7 +106,8 @@ class HumanChatApplication:
         self._memory_jobs = MemoryJobs(path if self._checkpoint.persistent else None)
         self._memory.service.on_delete(self._memory_jobs.forget)
         self._memory_worker = MemoryWorker(self._memory_jobs, formation, self._memory.service,
-                                           self._load_memory_source, self._memory.index)
+                                           self._load_memory_source, self._memory.index,
+                                           enabled=self._settings.memory_extraction_enabled)
         # Reconcile completed checkpoint sources before starting the worker. This closes
         # the gap between a Graph commit and registration in the separate job database.
         for session in self._sessions.list_recent(limit=2**31 - 1):
@@ -409,7 +410,7 @@ def open_human_chat_application(
             with open_tool_registry(settings) as tool_registry:
                 with open_voice_resource(settings, character) as voice:
                     retriever = MemoryRetriever(memory.service, memory.index)
-                    memory_llm = create_chat_model(settings)
+                    memory_llm = create_chat_model(settings, for_memory=True)
                     graph = build_graph(
                         settings,
                         checkpointer=checkpoint.saver,

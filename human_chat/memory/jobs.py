@@ -78,9 +78,10 @@ class MemoryJobs:
 
 
 class MemoryWorker:
-    def __init__(self, jobs, formation, service, load_source, index=None):
+    def __init__(self, jobs, formation, service, load_source, index=None, *, enabled=True):
         self.jobs, self.formation, self.service = jobs, formation, service
         self.load_source, self.index = load_source, index
+        self.enabled = enabled
         self._wake, self._stop = Event(), Event()
         self._thread = None
 
@@ -92,6 +93,8 @@ class MemoryWorker:
         self._wake.set()
 
     def process_one(self):
+        if not self.enabled:
+            return False
         job = self.jobs.next()
         if job is None:
             return False

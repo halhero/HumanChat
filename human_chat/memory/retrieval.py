@@ -66,6 +66,8 @@ class MemoryRetriever:
             for rank, i in enumerate(sorted(matches, key=lambda i: scores[i], reverse=True)[:self.limit], 1):
                 enter(views[i], "lexical", rank)
         if self.index and views:
+            if not self.index.covers(views):
+                diagnostics.append("semantic_projection_incomplete")
             try:
                 for rank, (item_id, _, parent_version) in enumerate(self.index.search(query, self.limit), 1):
                     view = by_id.get(item_id)

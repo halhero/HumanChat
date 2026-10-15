@@ -15,10 +15,10 @@ def now_iso():
 
 class Assertion(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    subject: str
-    relation: str
+    subject: str = Field(min_length=1, description="认识的主体，例如用户或明确项目名，而不是整句目标")
+    relation: str = Field(min_length=1, description="主体与内容的关系，例如目标、使用系统、回答方式")
     scope: str = ""
-    value: str | None = None
+    value: str | None = Field(default=None, description="完整认识的核心内容；仅局部维护时可空，新增认识必须非空")
     negated: bool = False
     state: str | None = None
     deadline: str | None = None

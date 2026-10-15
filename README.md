@@ -48,7 +48,8 @@ HumanChat/
     character.py              # Character prompt model and loader
     config.py                 # Environment settings
     graph.py                  # LangGraph Agent workflow
-    memory_*.py               # Long-term memory domain and persistence
+    memory/                   # Records, formation, retrieval, context, jobs and persistence
+    messages.py               # Shared source identity and provenance
     voice/                    # STT, TTS, and optional local TTS process lifecycle
     mcp_*.py                  # MCP configuration and providers
     session_*.py              # Session model and repository contract
@@ -171,10 +172,11 @@ browser contract. The response header `X-Turn-ID` identifies the turn for status
 review, and cancellation requests.
 
 On reload, the browser queries the session's current turn rather than trusting a locally
-cached turn id. Pending tool and memory reviews are recovered from persistent LangGraph
+cached turn id. Pending tool reviews are recovered from persistent LangGraph
 checkpoints after a backend restart. A recovered review receives a new HTTP turn id;
 the session id and checkpoint remain unchanged. Cancelling a pending phase clears its
-Graph continuation without executing unapproved tools or saving unapproved memories.
+Graph continuation without executing unapproved tools. Automatic memory maintenance has
+no review phase and does not keep the conversation turn open.
 
 ## Character
 
@@ -264,7 +266,10 @@ or automatic resumption of provider calls interrupted by a process crash.
 Long-term memory follows this dependency direction:
 
 ```text
-Graph -> MemoryService -> MemoryRepository -> JSON / LangGraph Store
+Before reply: Graph -> ContextBuilder -> hybrid recall -> task usefulness -> request budget
+After reply:  Application -> durable job -> formation/review -> MemoryService -> Repository
+                                                           -> JSON / LangGraph Store
+Derived index: LangChain InMemoryVectorStore + a local snapshot, real provider embeddings
 ```
 
 ```env
@@ -280,21 +285,69 @@ Available backends are `json`, `memory`, and `postgres`. Postgres also requires:
 HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
 ```
 
-Automatic extraction and user review remain LangGraph nodes. When confirmation is needed,
-the stream emits `review.required`; the browser can approve selected candidates through the
-turn decision endpoint and LangGraph resumes from its checkpoint.
+Completed replies register background memory jobs. New user messages are evidence;
+previous messages only provide interpretation context. Extraction and semantic review
+produce constrained, version-checked operations. Repeating a durable plan does not repeat
+the write. Changes retain history; corrections revoke errors; explicit deletion removes
+the record payload, its index projection and related queued plans. A persistent prohibition
+is distinct from a one-time deletion.
 
-Confirmed memories can also be managed manually from the memory button in the Web sidebar.
+Saving has no confirmation dialog, progress phase or saved-count event. Tool confirmation
+is unchanged. Automatic maintenance is eventually consistent: an immediate next turn may
+arrive before the background write finishes.
+
+Retrieval combines BM25 and real semantic embeddings. Current task background has its own
+candidate lane rather than competing only in topical top-k. Applicability is judged by
+purpose, and complete bundles are fitted into the actual request alongside tools, history
+and an output reserve. Selected references are rechecked against canonical records at use.
+
+```env
+HUMANCHAT_MEMORY_SEMANTIC_ENABLED="true"
+HUMANCHAT_MEMORY_EMBEDDING_MODEL="text-embedding-v4"
+HUMANCHAT_MEMORY_EMBEDDING_BASE_URL=""
+HUMANCHAT_MEMORY_EMBEDDING_API_KEY=""
+HUMANCHAT_MEMORY_PROCESSING_TOKENS="16000"
+HUMANCHAT_MEMORY_OUTPUT_TOKENS="4096"
+HUMANCHAT_MEMORY_CANDIDATE_LIMIT="8"
+HUMANCHAT_MEMORY_HISTORY_TOKENS="3000"
+HUMANCHAT_CHAT_CONTEXT_TOKENS="32000"
+HUMANCHAT_CHAT_OUTPUT_TOKENS="2048"
+```
+
+Empty embedding URL/key reuse the configured chat endpoint/key. Use a provider-compatible
+embedding model; requests cost provider tokens. Explicitly disabling semantic retrieval is
+a degraded lexical/catalog mode, not equivalent semantic behavior. The tokenizer budget is
+a conservative proxy, not the provider's exact token count. Size it below the actual model
+window. A large catalog may exceed the assessment budget; this is diagnosed internally.
+Incomplete or unavailable semantic recall can defer automatic additions rather than treating
+an empty result as proof that a record does not already exist.
+Memory model calls use JSON mode, schema validation and a separate output limit. For the
+current Qwen provider they explicitly disable thinking so reasoning cannot consume the
+whole structured-output allowance; choose a model that supports this mode.
+
+JSON is the default canonical backend. The matching `.index.json` and `.jobs.sqlite` files
+beside the configured memory path contain local derived state and are ignored by Git.
+Index snapshots can be rebuilt from canonical records; do not delete the canonical memory
+file or checkpoint database to repair an index. Durable jobs require persistent checkpoints.
+Run only one backend worker. PostgreSQL requires the optional PostgresStore dependencies;
+its remote service is not covered by the local JSON/Store checks.
+
+Memories can also be managed manually from the memory button in the Web sidebar.
 The public API uses stable memory ids rather than display positions:
 
 ```text
-GET    /api/v1/memories              list confirmed memories
+GET    /api/v1/memories              list currently usable memories
 POST   /api/v1/memories              add a manual memory
 DELETE /api/v1/memories/{memory_id}  remove one memory
 ```
 
-Manual and automatically confirmed memories use the same `MemoryService`; API and UI code
+Manual and automatic memories use the same `MemoryService`; API and UI code
 never access the underlying Repository or JSON/LangGraph Store directly.
+
+Deleting long-term memory does not erase the original conversation, existing checkpoints,
+backups or provider records. This is a single-user application, not an authenticated
+multi-tenant service. Step-by-step implementation and remaining limits are recorded in
+`资料/63` through `资料/78` (the numbered Markdown documents).
 
 ## Tools And MCP
 

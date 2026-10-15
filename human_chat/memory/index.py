@@ -112,3 +112,9 @@ class MemoryIndex:
         with self._lock:
             return [(document.id, score, document.metadata["parent_version"])
                     for document, score in self.store.similarity_search_with_score_by_vector(vector, k=limit)]
+
+    def covers(self, views):
+        with self._lock:
+            return all(view.id in self.store.store
+                       and self.store.store[view.id]["metadata"]["parent_version"] == view.parent_version
+                       for view in views)

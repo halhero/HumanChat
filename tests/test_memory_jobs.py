@@ -20,6 +20,8 @@ def test_crash_after_record_commit_reuses_plan_and_receipt(tmp_path):
         raise AssertionError("A durable plan must not be extracted again")
 
     worker = MemoryWorker(jobs, None, service, must_not_extract)
+    paused = MemoryWorker(jobs, None, service, must_not_extract, enabled=False)
+    assert not paused.process_one() and not jobs.is_done(job_id)
     assert worker.process_one() and jobs.is_done(job_id)
     assert len(service.load().items) == 1 and service.load().items[0].version == 1
     assert jobs.next() is None
