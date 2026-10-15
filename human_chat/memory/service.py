@@ -47,14 +47,20 @@ class LongTermMemoryService:
         self._namespace = namespace
         self._lock = RLock()
         self._index = None
+        self._on_delete = None
 
     def attach_index(self, index):
         self._index = index
+
+    def on_delete(self, callback):
+        self._on_delete = callback
 
     def _persist(self, item):
         self._repository.upsert_item(self._namespace, item)
         if self._index is not None:
             self._index.changed(item)
+        if item.status == "deleted" and self._on_delete is not None:
+            self._on_delete(item)
 
     @property
     def user_id(self):
@@ -148,6 +154,8 @@ class LongTermMemoryService:
             sources = {e.message_id for e in mutation.evidence}
             observed = max(e.message_time for e in mutation.evidence)
             for stored in items:
+                if stored.status == "deleted" and sources.intersection(stored.seen_sources) and mutation.kind not in ("delete", "forbid"):
+                    return result("rejected", "deleted_source")
                 if mutation.assertion and stored.blocked_identity == list(mutation.assertion.identity()) and mutation.kind not in ("delete", "forbid"):
                     return result("rejected", "forbidden_identity")
                 if (mutation.kind != "forbid" and stored.status == "deleted" and fingerprints(mutation.text, mutation.assertion).intersection(stored.suppressed)

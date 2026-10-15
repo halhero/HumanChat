@@ -101,6 +101,8 @@ class MemoryIndex:
         with self._lock:
             if generation != self._generation:
                 return False
+            if self.store.store == rows:
+                return True
             self.store.store = rows
             self._dump()
             return True
