@@ -9,6 +9,10 @@ class InMemoryRepository:
     def __init__(self):
         self.items = {}
 
+    def locked(self, namespace):
+        from threading import RLock
+        return RLock()
+
     def list_items(self, namespace):
         return list(self.items.values())
 
