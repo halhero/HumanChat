@@ -45,6 +45,9 @@ class Settings(BaseModel):
         le=100 * 1024 * 1024,
     )
     memory_extraction_enabled: bool = True
+    memory_processing_tokens: int = Field(default=16000, ge=2000, le=100000)
+    memory_candidate_limit: int = Field(default=8, ge=1, le=30)
+    memory_history_tokens: int = Field(default=3000, ge=0, le=16000)
     memory_user_id: str = "default"
     memory_backend: str = "json"
     memory_postgres_uri: str = ""
@@ -100,6 +103,9 @@ _ENV_OVERRIDES = (
         _parse_bool,
     ),
     ("memory_user_id", "HUMANCHAT_MEMORY_USER_ID", str),
+    ("memory_processing_tokens", "HUMANCHAT_MEMORY_PROCESSING_TOKENS", int),
+    ("memory_candidate_limit", "HUMANCHAT_MEMORY_CANDIDATE_LIMIT", int),
+    ("memory_history_tokens", "HUMANCHAT_MEMORY_HISTORY_TOKENS", int),
     ("memory_backend", "HUMANCHAT_MEMORY_BACKEND", str),
     ("memory_postgres_uri", "HUMANCHAT_MEMORY_POSTGRES_URI", str),
     ("checkpoint_backend", "HUMANCHAT_CHECKPOINT_BACKEND", str),
