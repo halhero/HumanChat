@@ -96,13 +96,25 @@ class LongTermMemoryService:
         if not normalized:
             return None
 
-        with self._lock:
+        with self._lock, self._repository.locked(self._namespace):
             item = self._repository.get_item(self._namespace, normalized)
-            if item is None:
+            if item is None or item.status == "deleted":
                 return None
-            if not self._repository.delete_item(self._namespace, item.id):
-                return None
+            if item.user_id not in (None, self.user_id):
+                raise ValueError("Memory belongs to another user")
+            self._repository.upsert_item(self._namespace, self._tombstone(item))
         return item
+
+    def _tombstone(self, item):
+        hashes = set(item.suppressed) | fingerprints(item.text, item.assertion)
+        for version in item.history:
+            hashes.update(fingerprints(version.text, version.assertion))
+        return item.model_copy(update={
+            "text": "", "assertion": None, "evidence": [], "history": [], "context_message_ids": [],
+            "status": "deleted", "version": item.version + 1,
+            "suppressed": sorted(hashes), "deleted_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     def format_for_prompt(self) -> str:
         items = [item.text for item in self.load().items]
@@ -127,6 +139,11 @@ class LongTermMemoryService:
             sources = {e.message_id for e in mutation.evidence}
             observed = max(e.message_time for e in mutation.evidence)
             for stored in items:
+                if mutation.assertion and stored.blocked_identity == list(mutation.assertion.identity()) and mutation.kind not in ("delete", "forbid"):
+                    return result("rejected", "forbidden_identity")
+                if (mutation.kind != "forbid" and stored.status == "deleted" and fingerprints(mutation.text, mutation.assertion).intersection(stored.suppressed)
+                        and (sources.intersection(stored.seen_sources) or (stored.deleted_at and observed <= stored.deleted_at))):
+                    return result("rejected", "deleted_source")
                 if mutation.kind == "add":
                     for version in stored.history:
                         if (version.status == "revoked"
@@ -134,7 +151,19 @@ class LongTermMemoryService:
                                 and (sources.intersection(e.message_id for e in version.evidence)
                                      or (version.ended_at and observed <= version.ended_at))):
                             return result("rejected", "revoked_source")
-            if mutation.kind == "add":
+            if mutation.kind == "forbid":
+                if mutation.assertion is None:
+                    return result("rejected", "policy_identity_required")
+                identity = list(mutation.assertion.identity())
+                for stored in items:
+                    if stored.assertion and list(stored.assertion.identity()) == identity:
+                        tombstone = self._tombstone(stored)
+                        tombstone.blocked_identity = identity
+                        self._repository.upsert_item(self._namespace, tombstone)
+                item = MemoryItem(id=uuid5(NAMESPACE_URL, f"{self._namespace}:{mutation.id}").hex,
+                                  text="", user_id=self.user_id, status="deleted", blocked_identity=identity,
+                                  seen_sources=sorted(sources), deleted_at=datetime.now(timezone.utc))
+            elif mutation.kind == "add":
                 if mutation.target_id is not None or mutation.expected_version is not None:
                     return result("rejected", "add_has_target")
                 if mutation.assertion is None or not mutation.assertion.value:
@@ -157,6 +186,12 @@ class LongTermMemoryService:
                     return result("conflict", "older_source", item.id)
                 if sources.issubset(item.seen_sources):
                     return result("rejected", "replayed_source", item.id)
+                if mutation.kind == "delete":
+                    deleted = self._tombstone(item)
+                    deleted.seen_sources = sorted(set(deleted.seen_sources) | sources)
+                    deleted.receipts[mutation.id] = mutation.digest()
+                    self._repository.upsert_item(self._namespace, deleted)
+                    return result("applied", item_id=item.id)
                 if mutation.kind != "retract":
                     if (item.assertion is None) != (mutation.assertion is None):
                         return result("rejected", "incompatible_assertion", item.id)

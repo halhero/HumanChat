@@ -77,6 +77,7 @@ class MemoryItem(BaseModel):
     receipts: dict[str, str] = Field(default_factory=dict)
     suppressed: list[str] = Field(default_factory=list)
     deleted_at: AwareDatetime | None = None
+    blocked_identity: list[str] = Field(default_factory=list)
 
     def usable_now(self, now=None):
         now = now or datetime.now(timezone.utc)
@@ -110,7 +111,7 @@ class Mutation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     user_id: str
-    kind: Literal["add", "duplicate", "update", "correct", "retract"]
+    kind: Literal["add", "duplicate", "update", "correct", "retract", "delete", "forbid"]
     text: str
     assertion: Assertion | None = None
     evidence: list[Evidence] = Field(min_length=1)

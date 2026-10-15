@@ -60,3 +60,23 @@ def test_correction_and_retraction_do_not_become_valid_history(service):
     assert service.apply(operation("withdraw", second=3, kind="retract", target=item)).outcome == "applied"
     assert service.load().items == []
     assert all(version.status == "revoked" for version in service.inventory()[0].history)
+
+
+def test_delete_removes_content_and_blocks_old_unknown_operations(service):
+    seed = operation("seed")
+    service.apply(seed)
+    item = service.load().items[0]
+    service.delete_by_id(item.id)
+    tombstone = service.inventory()[0]
+    assert tombstone.text == "" and tombstone.assertion is None
+    assert tombstone.evidence == [] and tombstone.history == []
+    assert service.apply(seed).outcome == "already_applied"
+    assert service.apply(operation("unseen-old", second=1)).reason == "deleted_source"
+    assert service.load().items == []
+
+
+def test_persistent_forbid_blocks_fresh_sources_of_same_identity(service):
+    service.apply(operation("seed"))
+    assert service.apply(operation("ban", second=1, kind="forbid")).outcome == "applied"
+    assert service.apply(operation("new-after-ban", second=2)).reason == "forbidden_identity"
+    assert service.load().items == []
