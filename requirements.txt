@@ -8,6 +8,7 @@ python-multipart>=0.0.20,<1
 langchain-core
 langchain-openai
 tiktoken>=0.7,<1
+numpy>=1.26,<3
 langgraph>=1.2,<2
 langgraph-checkpoint-sqlite
 langchain-mcp-adapters>=0.3,<0.4

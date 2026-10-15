@@ -46,6 +46,15 @@ class LongTermMemoryService:
         self._repository = repository
         self._namespace = namespace
         self._lock = RLock()
+        self._index = None
+
+    def attach_index(self, index):
+        self._index = index
+
+    def _persist(self, item):
+        self._repository.upsert_item(self._namespace, item)
+        if self._index is not None:
+            self._index.changed(item)
 
     @property
     def user_id(self):
@@ -88,7 +97,7 @@ class LongTermMemoryService:
                                           message_time=origin.occurred_at, quote=normalized)]
                 item.observed_at = origin.occurred_at
                 item.seen_sources = [origin.id]
-            self._repository.upsert_item(self._namespace, item)
+            self._persist(item)
         return item
 
     def delete_by_id(self, item_id: str) -> MemoryItem | None:
@@ -102,7 +111,7 @@ class LongTermMemoryService:
                 return None
             if item.user_id not in (None, self.user_id):
                 raise ValueError("Memory belongs to another user")
-            self._repository.upsert_item(self._namespace, self._tombstone(item))
+            self._persist(self._tombstone(item))
         return item
 
     def _tombstone(self, item):
@@ -159,7 +168,7 @@ class LongTermMemoryService:
                     if stored.assertion and list(stored.assertion.identity()) == identity:
                         tombstone = self._tombstone(stored)
                         tombstone.blocked_identity = identity
-                        self._repository.upsert_item(self._namespace, tombstone)
+                        self._persist(tombstone)
                 item = MemoryItem(id=uuid5(NAMESPACE_URL, f"{self._namespace}:{mutation.id}").hex,
                                   text="", user_id=self.user_id, status="deleted", blocked_identity=identity,
                                   seen_sources=sorted(sources), deleted_at=datetime.now(timezone.utc))
@@ -190,7 +199,7 @@ class LongTermMemoryService:
                     deleted = self._tombstone(item)
                     deleted.seen_sources = sorted(set(deleted.seen_sources) | sources)
                     deleted.receipts[mutation.id] = mutation.digest()
-                    self._repository.upsert_item(self._namespace, deleted)
+                    self._persist(deleted)
                     return result("applied", item_id=item.id)
                 if mutation.kind != "retract":
                     if (item.assertion is None) != (mutation.assertion is None):
@@ -239,5 +248,5 @@ class LongTermMemoryService:
                 item.seen_sources = sorted(set(item.seen_sources) | sources)
                 item.context_message_ids = mutation.context_message_ids
             item.receipts[mutation.id] = mutation.digest()
-            self._repository.upsert_item(self._namespace, item)
+            self._persist(item)
             return result("applied", item_id=item.id)

@@ -14,3 +14,4 @@ data/memory/*.json
 data/pytest-tmp*/
 !data/memory/*.example.json
 config/mcp_servers.json
+.validation-*/
