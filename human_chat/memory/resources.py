@@ -3,12 +3,12 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from human_chat.config import Settings
-from human_chat.memory_repository import (
+from human_chat.memory.repository import (
     JsonMemoryRepository,
     LangGraphMemoryRepository,
     default_memory_namespace,
 )
-from human_chat.memory_service import LongTermMemoryService, MemoryService
+from human_chat.memory.service import LongTermMemoryService, MemoryService
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@ from threading import RLock
 from typing import Protocol
 
 from human_chat.memory.models import LongTermMemory, MemoryItem
-from human_chat.memory_repository import MemoryNamespace, MemoryRepository
+from human_chat.memory.repository import MemoryNamespace, MemoryRepository
 
 
 class MemoryService(Protocol):

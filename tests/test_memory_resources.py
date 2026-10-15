@@ -1,5 +1,5 @@
 from human_chat.config import Settings
-from human_chat.memory_resources import open_memory_resource
+from human_chat.memory.resources import open_memory_resource
 
 
 def test_json_memory_resource_is_persistent(tmp_path):

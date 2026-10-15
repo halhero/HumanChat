@@ -13,7 +13,7 @@ from human_chat.character import load_character
 from human_chat.config import Settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
-from human_chat.memory_resources import MemoryResource, open_memory_resource
+from human_chat.memory.resources import MemoryResource, open_memory_resource
 from human_chat.memory.models import MemoryItem
 from human_chat.messages import new_source
 from human_chat.session_models import SessionRecord, now_local

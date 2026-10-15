@@ -15,7 +15,7 @@ from human_chat.memory_review import (
     parse_memory_review_decision,
     parse_memory_review_request,
 )
-from human_chat.memory_service import MemoryService
+from human_chat.memory.service import MemoryService
 from human_chat.messages import SourceMessage, new_source
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry

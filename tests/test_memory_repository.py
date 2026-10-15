@@ -1,7 +1,9 @@
 from langgraph.store.memory import InMemoryStore
+import pytest
+from datetime import datetime, timezone
 
-from human_chat.memory.models import MemoryItem
-from human_chat.memory_repository import (
+from human_chat.memory.models import Assertion, Evidence, MemoryItem, MemoryVersion
+from human_chat.memory.repository import (
     JsonMemoryRepository,
     LangGraphMemoryRepository,
     memory_path_for_namespace,
@@ -78,3 +80,20 @@ def test_langgraph_repository_reads_all_pages_and_exact_namespace():
     repository.upsert_item((*namespace, "child"), MemoryItem(text="other scope"))
 
     assert repository.list_items(namespace) == items
+
+
+@pytest.mark.parametrize("backend", ["json", "store"])
+def test_complete_versioned_record_survives_storage_round_trip(tmp_path, backend):
+    store = InMemoryStore()
+    path = tmp_path / "memory.json"
+    repository = JsonMemoryRepository(path) if backend == "json" else LangGraphMemoryRepository(store)
+    namespace = ("users", "default", "memory")
+    evidence = Evidence(message_id="u1", user_id="default", session_id="s1",
+                        message_time=datetime(2026, 1, 1, tzinfo=timezone.utc), quote="目标暂停")
+    item = MemoryItem(text="记忆模块暂停", user_id="default", version=2,
+                      assertion=Assertion(subject="HumanChat", relation="目标", value="记忆模块", state="暂停"),
+                      evidence=[evidence], receipts={"operation-1": "digest"},
+                      history=[MemoryVersion(version=1, text="记忆模块进行中", status="historical")])
+    repository.upsert_item(namespace, item)
+    reopened = JsonMemoryRepository(path) if backend == "json" else LangGraphMemoryRepository(store)
+    assert reopened.get_item(namespace, item.id) == item

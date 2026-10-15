@@ -3,12 +3,25 @@ import re
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
+from contextlib import contextmanager
+from threading import RLock
+import os
 
 from human_chat.config import Settings
 from human_chat.memory.models import LongTermMemory, MemoryItem, create_default_memory
 
 
 MemoryNamespace = tuple[str, ...]
+_LOCKS = {}
+_LOCKS_GUARD = RLock()
+
+
+@contextmanager
+def repository_lock(key):
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(key, RLock())
+    with lock:
+        yield
 
 
 def default_memory_namespace(settings: Settings) -> MemoryNamespace:
@@ -16,6 +29,9 @@ def default_memory_namespace(settings: Settings) -> MemoryNamespace:
 
 
 class MemoryRepository(Protocol):
+    def locked(self, namespace: MemoryNamespace):
+        ...
+
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
         ...
 
@@ -36,6 +52,9 @@ class MemoryRepository(Protocol):
 class JsonMemoryRepository:
     def __init__(self, base_path: Path):
         self.base_path = base_path
+
+    def locked(self, namespace):
+        return repository_lock(("json", os.path.normcase(str(memory_path_for_namespace(self.base_path, namespace).resolve()))))
 
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
         return list(self._load_memory(namespace).items)
@@ -101,6 +120,9 @@ class LangGraphMemoryRepository:
     def __init__(self, store):
         self.store = store
 
+    def locked(self, namespace):
+        return repository_lock(("store", id(self.store), namespace))
+
     def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
         # BaseStore.search defaults to ten results and matches namespace prefixes.
         # Fetch all pages but do not merge a child namespace into this memory scope.
@@ -117,7 +139,7 @@ class LangGraphMemoryRepository:
             if len(page) < page_size:
                 break
             offset += len(page)
-        return sorted(items, key=lambda item: item.created_at)
+        return sorted(items, key=lambda item: item.created_at or "")
 
     def get_item(
         self,
@@ -163,22 +185,12 @@ def _memory_item_from_store(stored) -> MemoryItem:
 
 
 def _stored_value(stored) -> dict:
-    if hasattr(stored, "value"):
-        return stored.value
-    if isinstance(stored, dict) and "value" in stored:
-        return stored["value"]
-    return stored
+    return stored.value
 
 
 def _stored_key(stored) -> str:
-    if hasattr(stored, "key"):
-        return stored.key
-    if isinstance(stored, dict):
-        return str(stored.get("key", ""))
-    return ""
+    return stored.key
 
 
 def _model_to_dict(model) -> dict:
-    if hasattr(model, "model_dump"):
-        return model.model_dump(mode="json")
-    return json.loads(model.json())
+    return model.model_dump(mode="json")

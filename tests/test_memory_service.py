@@ -1,5 +1,5 @@
 from human_chat.memory.models import MemoryItem
-from human_chat.memory_service import LongTermMemoryService
+from human_chat.memory.service import LongTermMemoryService
 
 
 TEST_NAMESPACE = ("users", "test", "memory")
