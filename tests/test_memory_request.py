@@ -10,13 +10,14 @@ from human_chat.memory.service import LongTermMemoryService
 from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
 from tests.test_memory_context import AssessmentModel
 from tests.test_graph import FakeChatModel
+from tests.test_memory_maintenance import operation, remember
 from human_chat.tool_provider import ToolRegistry
 import human_chat.graph as graph_module
 
 
 def test_request_rereads_deletion_and_counts_whole_request(tmp_path):
     service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
-    memory = service.add("代码审查先给风险结论")
+    memory = remember(service, "代码审查先给风险结论")
     model = AssessmentModel(ContextAssessment(task="审查", memories=[Applicability(id=f"{memory.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
     refs = context_references(MemoryContextBuilder(MemoryRetriever(service), model, Settings()).build("Python", []))
@@ -24,7 +25,7 @@ def test_request_rereads_deletion_and_counts_whole_request(tmp_path):
     messages, _ = assemble_request("system", [], [HumanMessage(content="Python")], refs, service, [], settings)
     assert memory.text in messages[0].content
     assert payload_tokens({"messages": [m.model_dump(mode="json") for m in messages], "tools": []}) + 128 <= 3488
-    service.delete_by_id(memory.id)
+    assert service.apply(operation("delete", second=2, kind="delete", target=memory)).outcome == "applied"
     messages, diagnostics = assemble_request("system", [], [HumanMessage(content="Python")], refs, service, [], settings)
     assert memory.text not in messages[0].content and "context_changed_since_selection" in diagnostics
     with pytest.raises(MemoryBudgetError):
@@ -33,7 +34,7 @@ def test_request_rereads_deletion_and_counts_whole_request(tmp_path):
 
 def test_selected_memory_reaches_real_graph_model_input(monkeypatch, tmp_path):
     service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
-    item = service.add("代码审查先给风险结论")
+    item = remember(service, "代码审查先给风险结论")
     selector = AssessmentModel(ContextAssessment(task="审查", memories=[Applicability(id=f"{item.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
     model = FakeChatModel([AIMessage(content="风险结论")])

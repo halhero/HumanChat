@@ -332,22 +332,24 @@ file or checkpoint database to repair an index. Durable jobs require persistent 
 Run only one backend worker. PostgreSQL requires the optional PostgresStore dependencies;
 its remote service is not covered by the local JSON/Store checks.
 
-Memories can also be managed manually from the memory button in the Web sidebar.
-The public API uses stable memory ids rather than display positions:
+Memory maintenance is internal to the Agent. The Web UI has no memory-management
+button or dialog, and the public API has no `/api/v1/memories` routes. Explicit
+corrections, deletion requests and requests not to retain information can be
+interpreted from conversation by the formation pipeline and executed through
+`MemoryService.apply`, with the same evidence, version and replay checks as other
+automatic operations. Ambiguous requests may be deferred; this is not a guarantee
+that every natural-language deletion request is understood or executed immediately.
 
-```text
-GET    /api/v1/memories              list currently usable memories
-POST   /api/v1/memories              add a manual memory
-DELETE /api/v1/memories/{memory_id}  remove one memory
-```
-
-Manual and automatic memories use the same `MemoryService`; API and UI code
-never access the underlying Repository or JSON/LangGraph Store directly.
+Only tool operations have an approval flow. Compatibility handling for legacy
+memory-approval checkpoints has been removed; upgrading does not automatically
+resume or discard those obsolete continuations. No stored conversations or memories
+are deleted by this code cleanup.
 
 Deleting long-term memory does not erase the original conversation, existing checkpoints,
 backups or provider records. This is a single-user application, not an authenticated
 multi-tenant service. Step-by-step implementation and remaining limits are recorded in
-`资料/63` through `资料/78` (the numbered Markdown documents).
+`资料/63` through `资料/78` (the numbered Markdown documents); `资料/79` records
+the subsequent removal of manual management and obsolete approval compatibility.
 
 ## Tools And MCP
 

@@ -21,6 +21,7 @@ from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.memory.service import LongTermMemoryService
 from langgraph.store.memory import InMemoryStore
 from tests.test_memory_context import AssessmentModel
+from tests.test_memory_maintenance import remember
 import human_chat.application as application_module
 
 
@@ -48,7 +49,7 @@ def lookup_context(value: str) -> str:
 def _build_test_graph(monkeypatch, model, registry=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
     service = LongTermMemoryService(LangGraphMemoryRepository(InMemoryStore()), ("users", "default", "memory"))
-    item = service.add("用户希望理解修改原因")
+    item = remember(service, "用户希望理解修改原因")
     selector = AssessmentModel(ContextAssessment(task="讲解", memories=[Applicability(id=f"{item.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
     return graph_module.build_graph(
@@ -136,14 +137,14 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
                 assert events[-1].type == "turn.completed"
                 assert not any("memory" in event.type or event.type == "review.required" for event in events)
                 assert await asyncio.to_thread(entered.wait, 2)
-                assert application.list_memories() == []
+                assert application._memory.service.load().items == []
                 assert await first.get_session_turn(session.id) is None
             finally:
                 release.set()
             deadline = time.monotonic() + 3
-            while not application.list_memories() and time.monotonic() < deadline:
+            while not application._memory.service.load().items and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
-            assert len(application.list_memories()) == 1
+            assert len(application._memory.service.load().items) == 1
             emitted_id = next(
                 event.data["message"]["id"]
                 for event in events if event.type == "message.completed"
@@ -153,7 +154,7 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
 
         with open_human_chat_application(settings) as application:
             recovered = ConversationService(application)
-            assert len(application.list_memories()) == 1
+            assert len(application._memory.service.load().items) == 1
             assert application._memory_jobs.next() is None
             assert await recovered.get_session_turn(session.id) is None
             await recovered.shutdown()
@@ -187,7 +188,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
             assert events[-1].type == "review.required" and events[-1].data["kind"] == "tool"
             assert await service.cancel_turn(stream.turn_id) == "cancelled"
             assert application.get_pending_review(session.id) is None
-            assert application.list_memories() == []
+            assert application._memory.service.load().items == []
             assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)
             assert await fresh_service.get_session_turn(session.id) is None

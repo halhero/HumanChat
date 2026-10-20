@@ -1,8 +1,9 @@
 from human_chat.memory.models import MemoryItem
 from human_chat.memory.service import LongTermMemoryService
+from tests.test_memory_maintenance import operation, remember
 
 
-TEST_NAMESPACE = ("users", "test", "memory")
+TEST_NAMESPACE = ("users", "default", "memory")
 
 
 class InMemoryRepository:
@@ -32,31 +33,31 @@ def create_service():
     return service, repository
 
 
-def test_add_normalizes_and_deduplicates_memory_text():
+def test_add_rejects_duplicate_assertion_without_a_target():
     service, _ = create_service()
 
-    assert service.add("  用户喜欢中文讲解。  ")
-    assert not service.add("用户喜欢中文讲解。")
-    assert [item.text for item in service.load().items] == ["用户喜欢中文讲解。"]
+    item = remember(service, "用户喜欢中文讲解。")
+    duplicate = operation("another-source", second=1, assertion=item.assertion)
+    assert service.apply(duplicate).reason == "duplicate_requires_target"
+    assert service.load().items == [item]
 
 
 def test_delete_uses_stable_memory_id():
-    service, repository = create_service()
-    first = MemoryItem(text="第一条")
-    second = MemoryItem(text="第二条")
-    repository.upsert_item(TEST_NAMESPACE, first)
-    repository.upsert_item(TEST_NAMESPACE, second)
+    service, _ = create_service()
+    first = remember(service, "第一条")
+    second = remember(service, "第二条")
 
-    assert service.delete_by_id(second.id) == second
-    assert [item.text for item in service.load().items] == ["第一条"]
-    assert service.delete_by_id(second.id) is None
+    deletion = operation("delete-second", second=2, kind="delete", target=second)
+    assert service.apply(deletion).outcome == "applied"
+    assert service.load().items == [first]
+    assert service.apply(deletion).outcome == "already_applied"
 
 
 def test_load_returns_repository_items_without_prompt_formatting():
-    service, _ = create_service()
+    service, repository = create_service()
 
     assert service.load().items == []
 
-    service.add("用户正在开发 HumanChat。")
+    repository.upsert_item(TEST_NAMESPACE, MemoryItem(text="用户正在开发 HumanChat。"))
 
     assert [item.text for item in service.load().items] == ["用户正在开发 HumanChat。"]

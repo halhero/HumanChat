@@ -22,6 +22,15 @@ def operation(name, *, second=0, kind="add", target=None, assertion=None, fields
         target_id=target.id if target else None, expected_version=target.version if target else None, fields=list(fields))
 
 
+def remember(service, text):
+    """Seed synthetic memory through the same mutation boundary as the worker."""
+    result = service.apply(operation(text, assertion=Assertion(
+        subject="user:default", relation="背景", value=text,
+    )))
+    assert result.outcome == "applied"
+    return next(item for item in service.inventory() if item.id == result.item_id)
+
+
 def test_retry_and_partial_update_preserve_goal(service):
     seed = operation("seed")
     assert service.apply(seed).outcome == "applied"
@@ -66,7 +75,9 @@ def test_delete_removes_content_and_blocks_old_unknown_operations(service):
     seed = operation("seed")
     service.apply(seed)
     item = service.load().items[0]
-    service.delete_by_id(item.id)
+    deletion = operation("delete", second=2, kind="delete", target=item)
+    assert service.apply(deletion).outcome == "applied"
+    assert service.apply(deletion).outcome == "already_applied"
     tombstone = service.inventory()[0]
     assert tombstone.text == "" and tombstone.assertion is None
     assert tombstone.evidence == [] and tombstone.history == []

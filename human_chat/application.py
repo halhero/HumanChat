@@ -14,7 +14,6 @@ from human_chat.config import Settings
 from human_chat.graph import build_graph
 from human_chat.logging_config import get_logger
 from human_chat.memory.resources import MemoryResource, open_memory_resource
-from human_chat.memory.models import MemoryItem
 from human_chat.memory.context import MemoryContextBuilder
 from human_chat.memory.formation import MemoryFormation
 from human_chat.memory.jobs import MemoryJobs, MemoryWorker
@@ -112,9 +111,6 @@ class HumanChatApplication:
         # the gap between a Graph commit and registration in the separate job database.
         for session in self._sessions.list_recent(limit=2**31 - 1):
             snapshot = self._graph.get_state(self._graph_config(session.thread_id))
-            if any(p.value.get("type") == "memory_review" for p in snapshot.interrupts if isinstance(p.value, dict)):
-                self.discard_pending_turn(session.id)
-                snapshot = self._graph.get_state(self._graph_config(session.thread_id))
             self._enqueue_memory_sources(session, snapshot, all_completed=True)
         self._memory_worker.start()
 
@@ -195,15 +191,6 @@ class HumanChatApplication:
             raise SpeechSynthesisError("当前角色未配置 TTS 服务。")
         return service.synthesize(text, voice_config)
 
-    def list_memories(self) -> list[MemoryItem]:
-        return self._memory.service.load().items
-
-    def add_memory(self, text: str) -> MemoryItem | None:
-        return self._memory.service.add(text, source="manual")
-
-    def delete_memory(self, memory_id: str) -> MemoryItem | None:
-        return self._memory.service.delete_by_id(memory_id)
-
     def create_session(self) -> SessionRecord:
         session = self._sessions.create()
         return self._synchronize_session_recovery(session)
@@ -254,14 +241,11 @@ class HumanChatApplication:
         snapshot = self._graph.get_state(self._graph_config(session.thread_id))
         for pending in snapshot.interrupts:
             if isinstance(pending.value, dict):
-                if pending.value.get("type") == "memory_review":
-                    self.discard_pending_turn(session_id)
-                    return None
                 return pending.value
         return None
 
     def discard_pending_turn(self, session_id: str) -> None:
-        """Finish a stopped phase without running tools or accepting memories.
+        """Finish a stopped conversation phase without running pending tools.
 
         The caller must have stopped the worker first. Updating as the terminal node
         clears pending Graph tasks while retaining the committed message history.

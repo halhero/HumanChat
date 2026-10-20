@@ -36,7 +36,7 @@ def test_delete_clears_pending_plan_payload(tmp_path):
     service.on_delete(jobs.forget)
     job_id = jobs.enqueue(user_id="default", thread_id="s1", checkpoint_id="cp1", source_id="source-seed", source_time="2026-01-01")
     jobs.save_plan(job_id, FormationPlan(operations=[operation("seed")]))
-    service.delete_by_id(item.id)
+    assert service.apply(operation("delete", second=2, kind="delete", target=item)).outcome == "applied"
     assert jobs.is_done(job_id)
     assert jobs._db.execute("SELECT plan FROM memory_jobs WHERE id=?", (job_id,)).fetchone()[0] is None
     jobs.close()

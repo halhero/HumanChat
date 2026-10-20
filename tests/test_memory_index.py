@@ -3,6 +3,7 @@ from langchain_core.embeddings import Embeddings
 from human_chat.memory.index import MemoryIndex, memory_views
 from human_chat.memory.repository import JsonMemoryRepository
 from human_chat.memory.service import LongTermMemoryService
+from tests.test_memory_maintenance import operation, remember
 
 
 class CountingEmbeddings(Embeddings):
@@ -27,14 +28,18 @@ def test_snapshot_reuse_and_delete_during_slow_sync(tmp_path):
     path = tmp_path / "index.json"
     index = MemoryIndex(embeddings, path, "test")
     service.attach_index(index)
-    first = service.add("Only local synthetic content")
+    first = remember(service, "Only local synthetic content")
     assert not index.covers(memory_views(service.inventory()))
     assert index.sync(service)
     assert index.covers(memory_views(service.inventory()))
     reloaded = MemoryIndex(embeddings, path, "test")
     assert reloaded.sync(service) and embeddings.calls == 1
-    second = service.add("Must not survive deletion")
-    embeddings.during_embed = lambda: service.delete_by_id(second.id)
+    second = remember(service, "Must not survive deletion")
+
+    def delete_during_embed():
+        assert service.apply(operation("delete", second=2, kind="delete", target=second)).outcome == "applied"
+
+    embeddings.during_embed = delete_during_embed
     assert not index.sync(service)
     assert second.text not in path.read_text(encoding="utf-8")
     embeddings.during_embed = None

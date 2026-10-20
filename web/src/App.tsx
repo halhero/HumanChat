@@ -13,7 +13,6 @@ import {
   startTurn,
 } from "./api";
 import { ChatView } from "./components/ChatView";
-import { MemoryDialog } from "./components/MemoryDialog";
 import { ReviewDialog } from "./components/ReviewDialog";
 import { Sidebar } from "./components/Sidebar";
 import { useVoice } from "./hooks/useVoice";
@@ -38,7 +37,6 @@ export default function App() {
   const [currentTurnId, setCurrentTurnId] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewRequest | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [memoryOpen, setMemoryOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const voice = useVoice({
@@ -355,10 +353,6 @@ export default function App() {
         locked={locked}
         onClose={() => setSidebarOpen(false)}
         onCreate={() => void handleCreateSession()}
-        onOpenMemories={() => {
-          setMemoryOpen(true);
-          setSidebarOpen(false);
-        }}
         onSelect={handleSelectSession}
       />
       <ChatView
@@ -409,13 +403,6 @@ export default function App() {
           submitting={busy}
           onApprove={() => void submitReview("approve")}
           onReject={() => void submitReview("reject")}
-        />
-      )}
-
-      {memoryOpen && (
-        <MemoryDialog
-          onClose={() => setMemoryOpen(false)}
-          onError={setError}
         />
       )}
     </div>

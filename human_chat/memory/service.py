@@ -3,9 +3,8 @@ from typing import Protocol
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
-from human_chat.memory.models import Evidence, LongTermMemory, MemoryItem, MemoryVersion, Mutation, MutationResult, fingerprints
+from human_chat.memory.models import LongTermMemory, MemoryItem, MemoryVersion, Mutation, MutationResult, fingerprints
 from human_chat.memory.repository import MemoryNamespace, MemoryRepository
-from human_chat.messages import new_source
 
 
 class MemoryService(Protocol):
@@ -20,17 +19,6 @@ class MemoryService(Protocol):
         ...
 
     def load(self) -> LongTermMemory:
-        ...
-
-    def add(
-        self,
-        text: str,
-        source: str = "manual",
-        confidence: float | None = None,
-    ) -> MemoryItem | None:
-        ...
-
-    def delete_by_id(self, item_id: str) -> MemoryItem | None:
         ...
 
 
@@ -72,50 +60,6 @@ class LongTermMemoryService:
 
     def load(self) -> LongTermMemory:
         return LongTermMemory(items=[item for item in self.inventory() if item.usable_now()])
-
-    def add(
-        self,
-        text: str,
-        source: str = "manual",
-        confidence: float | None = None,
-    ) -> MemoryItem | None:
-        normalized = text.strip()
-        if not normalized:
-            return None
-
-        with self._lock, self._repository.locked(self._namespace):
-            items = self._repository.list_items(self._namespace)
-            if normalized in [item.text for item in items]:
-                return None
-
-            item = MemoryItem(
-                text=normalized,
-                source=source,
-                confidence=confidence,
-                user_id=self.user_id,
-            )
-            if source == "manual":
-                origin = new_source(normalized, user_id=self.user_id, session_id="manual")
-                item.evidence = [Evidence(message_id=origin.id, user_id=self.user_id, session_id="manual",
-                                          message_time=origin.occurred_at, quote=normalized)]
-                item.observed_at = origin.occurred_at
-                item.seen_sources = [origin.id]
-            self._persist(item)
-        return item
-
-    def delete_by_id(self, item_id: str) -> MemoryItem | None:
-        normalized = item_id.strip()
-        if not normalized:
-            return None
-
-        with self._lock, self._repository.locked(self._namespace):
-            item = self._repository.get_item(self._namespace, normalized)
-            if item is None or item.status == "deleted":
-                return None
-            if item.user_id not in (None, self.user_id):
-                raise ValueError("Memory belongs to another user")
-            self._persist(self._tombstone(item))
-        return item
 
     def _tombstone(self, item):
         hashes = set(item.suppressed) | fingerprints(item.text, item.assertion)

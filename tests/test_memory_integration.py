@@ -3,18 +3,11 @@ from contextlib import nullcontext
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
-from langgraph.graph import START, StateGraph
-from langgraph.types import interrupt
 
 import human_chat.application as application_module
 import human_chat.graph as graph_module
 from human_chat.api.app import create_api
-from human_chat.application import open_human_chat_application
-from human_chat.checkpointing import open_checkpointer
 from human_chat.config import Settings
-from human_chat.messages import new_source
-from human_chat.schemas import ChatState
-from human_chat.storage.json_session_repository import JsonSessionRepository
 from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_graph import FakeChatModel
 
@@ -25,7 +18,7 @@ def isolated_settings(tmp_path):
         checkpoint_path=tmp_path / "checkpoint.sqlite")
 
 
-def test_http_tool_review_restart_and_memory_delete_contract(monkeypatch, tmp_path):
+def test_http_tool_review_restart_preserves_tool_only_contract(monkeypatch, tmp_path):
     calls = []
 
     @tool
@@ -56,32 +49,16 @@ def test_http_tool_review_restart_and_memory_delete_contract(monkeypatch, tmp_pa
         assert response.status_code == 200 and "message.completed" in response.text and "turn.completed" in response.text
         assert "memory.saved" not in response.text and calls == ["synthetic"]
         assert len(client.get(f"/api/v1/sessions/{session_id}").json()["messages"]) == 2
-        item = client.post("/api/v1/memories", json={"text": "isolated-deletable-content"}).json()
-        assert client.delete(f"/api/v1/memories/{item['id']}").status_code == 204
-        assert client.get("/api/v1/memories").json()["items"] == []
-        assert "isolated-deletable-content" not in settings.memory_path.read_text(encoding="utf-8")
 
 
-def test_legacy_memory_interrupt_is_not_auto_approved(monkeypatch, tmp_path):
+def test_manual_memory_routes_are_not_exposed(monkeypatch, tmp_path):
     settings = isolated_settings(tmp_path)
-    repository = JsonSessionRepository(settings.session_dir)
-    session = repository.create()
-    source = new_source("只是一段旧对话", user_id="default", session_id=session.id)
-    assistant = new_source("旧回答", user_id="default", session_id=session.id, role="assistant")
-
-    def old_review(state):
-        interrupt({"type": "memory_review", "request": {"candidates": [{"text": "must-not-be-approved"}]}})
-        raise AssertionError("Old node must not resume")
-
-    with open_checkpointer(settings) as checkpoint:
-        workflow = StateGraph(ChatState)
-        workflow.add_node("review_memory", old_review)
-        workflow.add_edge(START, "review_memory")
-        old = workflow.compile(checkpointer=checkpoint.saver)
-        old.invoke({"question": source.content, "messages": [source.to_message(), assistant.to_message()]},
-                   config={"configurable": {"thread_id": session.thread_id}})
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: FakeChatModel([]))
-    with open_human_chat_application(settings) as application:
-        assert application.get_pending_review(session.id) is None
-        assert application.list_memories() == []
-        assert len(application.get_session_with_messages(session.id)[1]) == 2
+    with TestClient(create_api(settings)) as client:
+        assert not any("/memories" in path for path in client.get("/openapi.json").json()["paths"])
+        assert client.get("/api/v1/memories").status_code == 404
+        # A mounted frontend catch-all yields 405 for non-GET methods; API-only mode yields 404.
+        assert client.post("/api/v1/memories", json={"text": "must-not-be-written"}).status_code in (404, 405)
+        assert client.delete("/api/v1/memories/unknown").status_code in (404, 405)
+        service = client.app.state.human_chat_application._memory.service
+        assert service.inventory() == []
