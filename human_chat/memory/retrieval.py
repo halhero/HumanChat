@@ -8,7 +8,6 @@ from rank_bm25 import BM25Okapi
 from human_chat.logging_config import get_logger
 from human_chat.memory.index import MemoryView, memory_views
 
-
 logger = get_logger(__name__)
 
 
@@ -44,8 +43,8 @@ class MemoryRetriever:
     def __init__(self, service, index=None, limit=12):
         self.service, self.index, self.limit = service, index, limit
 
-    def recall(self, query, *, purpose="answer", identity=None):
-        views = memory_views(self.service.inventory())
+    def recall(self, query, *, purpose="answer", identity=None, items=None):
+        views = memory_views(self.service.inventory() if items is None else items)
         if purpose == "answer":
             views = [v for v in views if v.status in ("current", "historical")]
         by_id = {v.id: v for v in views}

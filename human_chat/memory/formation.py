@@ -5,9 +5,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from human_chat.messages import SourceBatch
 from human_chat.memory.models import Assertion, Evidence, Mutation, PatchField
 from human_chat.memory.tokens import structured_call
+from human_chat.messages import SourceBatch
 
 
 class Quote(BaseModel):
@@ -60,6 +60,7 @@ class FormationPlan(BaseModel):
 
 REVIEW_PROMPT = """复核每个候选的新证据支持程度，并给出自动维护提案。这是提取后的语义复核，不是独立事实证明。
 必须阅读完整new_messages、必要前文和限定词；旧记忆仅供比对，不能证明新断言。
+每个candidate_context只包含该候选独立召回的旧记录和检索诊断；不得把其他候选的记录当作当前候选的更新目标。
 逐字段复核候选。范围若漏了代码审查等限定，应在reviewed_assertion修正，不能放大为所有对话偏好。
 消息的occurred_at和evidence.message_time只是来源时间，不是事实生效时间。原话未明确事实时间就将effective_time置null。
 新的完整认识必须有value；局部维护不补造缺失内容。supported时用reviewed_assertion给出复核后的完整结构。
@@ -145,16 +146,36 @@ class MemoryFormation:
         candidates, diagnostics = self.extract(batch)
         if not candidates:
             return FormationPlan(diagnostics=diagnostics)
-        recall = self.retriever.recall("\n".join(c.claim.text for c in candidates), purpose="maintenance")
-        inventory = {item.id: item for item in self.service.inventory()}
-        identities = {c.claim.assertion.identity() for c in candidates}
-        targets = {c.view.parent_id for c in recall.candidates}
-        targets.update(item.id for item in inventory.values() if item.assertion and item.assertion.identity() in identities)
-        payload = {"source_batch": batch.model_dump(mode="json"),
-                   "candidates": [c.model_dump(mode="json") for c in candidates],
-                   "records": [inventory[key].model_dump(mode="json") for key in sorted(targets)],
-                   "policies": [item.blocked_identity for item in inventory.values() if item.blocked_identity],
-                   "retrieval_diagnostics": recall.diagnostics}
+        inventory_items = self.service.inventory()
+        inventory = {item.id: item for item in inventory_items}
+        recalls = {
+            candidate.id: self.retriever.recall(
+                candidate.claim.text,
+                purpose="maintenance",
+                identity=candidate.claim.assertion.identity(),
+                items=inventory_items,
+            )
+            for candidate in candidates
+        }
+        candidate_targets = {
+            candidate_id: {entry.view.parent_id for entry in recall.candidates}
+            for candidate_id, recall in recalls.items()
+        }
+        payload = {
+            "source_batch": batch.model_dump(mode="json"),
+            "candidate_contexts": [
+                {
+                    "candidate": candidate.model_dump(mode="json"),
+                    "records": [
+                        inventory[item_id].model_dump(mode="json")
+                        for item_id in sorted(candidate_targets[candidate.id])
+                    ],
+                    "retrieval_diagnostics": recalls[candidate.id].diagnostics,
+                }
+                for candidate in candidates
+            ],
+            "policies": [item.blocked_identity for item in inventory.values() if item.blocked_identity],
+        }
         review = structured_call(self.llm, Review, REVIEW_PROMPT, payload, self.settings.memory_processing_tokens)
         by_id = {c.id: c for c in candidates}
         counts = {key: sum(d.candidate_id == key for d in review.decisions) for key in by_id}
@@ -169,6 +190,8 @@ class MemoryFormation:
             else:
                 claim = candidate.claim
                 assertion = decision.reviewed_assertion
+                targets = candidate_targets[candidate.id]
+                recall_diagnostics = recalls[candidate.id].diagnostics
                 if not set(decision.fields).issubset(claim.supplied_fields):
                     error = "unsupported_patch_fields"
                 elif assertion is None and decision.operation not in ("delete", "retract"):
@@ -179,7 +202,7 @@ class MemoryFormation:
                     error = "destructive_intent_not_supported"
                 elif decision.operation == "correct" and claim.intent != "correct":
                     error = "correction_intent_not_supported"
-                elif decision.operation == "add" and recall.diagnostics and inventory:
+                elif decision.operation == "add" and recall_diagnostics and inventory:
                     error = "incomplete_recall_cannot_prove_new_record"
                 elif decision.operation == "add" and not assertion.value:
                     error = "incomplete_new_assertion"
