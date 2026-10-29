@@ -5,7 +5,6 @@ from typing import Literal
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _UNSET = object()
 
@@ -49,6 +48,7 @@ class Settings(BaseModel):
     memory_extraction_enabled: bool = True
     memory_processing_tokens: int = Field(default=16000, ge=2000, le=100000)
     memory_candidate_limit: int = Field(default=8, ge=1, le=30)
+    memory_recall_limit: int = Field(default=24, ge=4, le=100)
     memory_history_tokens: int = Field(default=3000, ge=0, le=16000)
     memory_output_tokens: int = Field(default=4096, ge=512, le=16000)
     memory_embedding_model: str = "text-embedding-v4"
@@ -56,7 +56,7 @@ class Settings(BaseModel):
     memory_embedding_api_key: str = ""
     memory_semantic_enabled: bool = True
     memory_user_id: str = "default"
-    memory_backend: str = "json"
+    memory_backend: str = "sqlite"
     memory_postgres_uri: str = ""
     checkpoint_backend: str = "sqlite"
     checkpoint_allow_memory_fallback: bool = False
@@ -73,7 +73,7 @@ class Settings(BaseModel):
     frontend_dist_path: Path = PROJECT_ROOT / "web" / "dist"
 
     character_path: Path = PROJECT_ROOT / "characters" / "nanami.yaml"
-    memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.json"
+    memory_path: Path = PROJECT_ROOT / "data" / "memory" / "user_profile.sqlite"
     checkpoint_path: Path = PROJECT_ROOT / "data" / "checkpoints" / "langgraph.sqlite"
     mcp_config_path: Path = PROJECT_ROOT / "config" / "mcp_servers.json"
     session_dir: Path = PROJECT_ROOT / "data" / "sessions"
@@ -120,6 +120,7 @@ _ENV_OVERRIDES = (
     ("memory_user_id", "HUMANCHAT_MEMORY_USER_ID", str),
     ("memory_processing_tokens", "HUMANCHAT_MEMORY_PROCESSING_TOKENS", int),
     ("memory_candidate_limit", "HUMANCHAT_MEMORY_CANDIDATE_LIMIT", int),
+    ("memory_recall_limit", "HUMANCHAT_MEMORY_RECALL_LIMIT", int),
     ("memory_history_tokens", "HUMANCHAT_MEMORY_HISTORY_TOKENS", int),
     ("memory_output_tokens", "HUMANCHAT_MEMORY_OUTPUT_TOKENS", int),
     ("memory_embedding_model", "HUMANCHAT_MEMORY_EMBEDDING_MODEL", str),

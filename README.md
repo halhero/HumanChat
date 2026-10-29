@@ -268,18 +268,18 @@ Long-term memory follows this dependency direction:
 ```text
 Before reply: Graph -> ContextBuilder -> hybrid recall -> task usefulness -> request budget
 After reply:  Application -> durable job -> formation/review -> MemoryService -> Repository
-                                                           -> JSON / LangGraph Store
-Derived index: LangChain InMemoryVectorStore + a local snapshot, real provider embeddings
+                                                           -> SQLite / LangGraph Store
+Search projection: SQLite FTS5 + sqlite-vec, or PostgreSQL FTS + pgvector HNSW
 ```
 
 ```env
 HUMANCHAT_MEMORY_EXTRACTION_ENABLED="true"
 HUMANCHAT_MEMORY_USER_ID="default"
-HUMANCHAT_MEMORY_BACKEND="json"
-HUMANCHAT_MEMORY_PATH="data/memory/user_profile.json"
+HUMANCHAT_MEMORY_BACKEND="sqlite"
+HUMANCHAT_MEMORY_PATH="data/memory/user_profile.sqlite"
 ```
 
-Available backends are `json`, `memory`, and `postgres`. Postgres also requires:
+Available backends are `sqlite`, `memory`, and `postgres`. Postgres also requires:
 
 ```env
 HUMANCHAT_MEMORY_POSTGRES_URI="postgresql://..."
@@ -289,17 +289,19 @@ Completed replies register background memory jobs. New user messages are evidenc
 previous messages only provide interpretation context. Extraction and semantic review
 produce constrained, version-checked operations. Repeating a durable plan does not repeat
 the write. Changes retain history; corrections revoke errors; explicit deletion removes
-the record payload, its index projection and related queued plans. A persistent prohibition
-is distinct from a one-time deletion.
+the record payload and its search projection.
 
 Saving has no confirmation dialog, progress phase or saved-count event. Tool confirmation
 is unchanged. Automatic maintenance is eventually consistent: an immediate next turn may
 arrive before the background write finishes.
 
-Retrieval combines BM25 and real semantic embeddings. Current task background has its own
-candidate lane rather than competing only in topical top-k. Applicability is judged by
-purpose, and complete bundles are fitted into the actual request alongside tools, history
-and an output reserve. Selected references are rechecked against canonical records at use.
+Retrieval combines indexed lexical search and real semantic embeddings. Local lexical ranking
+uses FTS5 BM25; production vector search uses pgvector HNSW. The two bounded result lists are
+merged with reciprocal-rank fusion before task applicability is judged. Only selected parent
+IDs are read from canonical storage, and those references are rechecked when the final model
+request is assembled. Current lightweight search documents also provide the task-background
+catalog so non-topical collaboration constraints are not lost; this does not read canonical
+records, but catalog size remains a separate relevance and token-budget concern.
 
 ```env
 HUMANCHAT_MEMORY_SEMANTIC_ENABLED="true"
@@ -309,6 +311,7 @@ HUMANCHAT_MEMORY_EMBEDDING_API_KEY=""
 HUMANCHAT_MEMORY_PROCESSING_TOKENS="16000"
 HUMANCHAT_MEMORY_OUTPUT_TOKENS="4096"
 HUMANCHAT_MEMORY_CANDIDATE_LIMIT="8"
+HUMANCHAT_MEMORY_RECALL_LIMIT="24"
 HUMANCHAT_MEMORY_HISTORY_TOKENS="3000"
 HUMANCHAT_CHAT_CONTEXT_TOKENS="32000"
 HUMANCHAT_CHAT_OUTPUT_TOKENS="2048"
@@ -316,27 +319,27 @@ HUMANCHAT_CHAT_OUTPUT_TOKENS="2048"
 
 Empty embedding URL/key reuse the configured chat endpoint/key. Use a provider-compatible
 embedding model; requests cost provider tokens. Explicitly disabling semantic retrieval is
-a degraded lexical/catalog mode, not equivalent semantic behavior. The tokenizer budget is
+a degraded lexical-only mode, not equivalent semantic behavior. The tokenizer budget is
 a conservative proxy, not the provider's exact token count. Size it below the actual model
-window. A large catalog may exceed the assessment budget; this is diagnosed internally.
 Incomplete or unavailable semantic recall can defer automatic additions rather than treating
 an empty result as proof that a record does not already exist.
 Memory model calls use JSON mode, schema validation and a separate output limit. For the
 current Qwen provider they explicitly disable thinking so reasoning cannot consume the
 whole structured-output allowance; choose a model that supports this mode.
 
-JSON is the default canonical backend. The matching `.index.json` and `.jobs.sqlite` files
-beside the configured memory path contain local derived state and are ignored by Git.
-Index snapshots can be rebuilt from canonical records; do not delete the canonical memory
-file or checkpoint database to repair an index. Durable jobs require persistent checkpoints.
-Run only one backend worker. PostgreSQL requires the optional PostgresStore dependencies;
-its remote service is not covered by the local JSON/Store checks.
+SQLite is the default canonical backend. The matching `.search.sqlite` and `.jobs.sqlite`
+files beside the configured memory path contain the bounded search projection and durable
+maintenance jobs. Canonical writes update only the affected search documents; application
+startup and idle workers never scan all canonical memory. Existing JSON memory files are
+left untouched and are not migrated automatically. Durable jobs require persistent checkpoints.
+Run only one backend worker. PostgreSQL requires the `vector` extension; its remote service
+is not covered by local SQLite checks.
 
 Memory maintenance is internal to the Agent. The Web UI has no memory-management
 button or dialog, and the public API has no `/api/v1/memories` routes. Explicit
-corrections, deletion requests and requests not to retain information can be
+corrections, retractions and deletion requests can be
 interpreted from conversation by the formation pipeline and executed through
-`MemoryService.apply`, with the same evidence, version and replay checks as other
+`MemoryService.apply`, with the same evidence, version and idempotency checks as other
 automatic operations. Ambiguous requests may be deferred; this is not a guarantee
 that every natural-language deletion request is understood or executed immediately.
 

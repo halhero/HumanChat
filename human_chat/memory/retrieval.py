@@ -1,31 +1,16 @@
-"""Purpose-aware candidate entry, before any applicability judgment."""
+"""Hybrid recall over the lightweight search projection."""
 
-import re
 from dataclasses import dataclass, field
 
-from rank_bm25 import BM25Okapi
-
 from human_chat.logging_config import get_logger
-from human_chat.memory.index import MemoryView, memory_views
+from human_chat.memory.search import MemorySearch, SearchDocument
 
 logger = get_logger(__name__)
 
 
-def lexical_tokens(text):
-    words = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]+", text.casefold())
-    tokens = []
-    for word in words:
-        if re.fullmatch(r"[\u4e00-\u9fff]+", word):
-            tokens.extend(word)
-            tokens.extend(word[i:i + 2] for i in range(len(word) - 1))
-        else:
-            tokens.append(word)
-    return tokens
-
-
 @dataclass
 class RecalledMemory:
-    view: MemoryView
+    view: SearchDocument
     reasons: list[str] = field(default_factory=list)
     score: float = 0
 
@@ -40,53 +25,47 @@ class RecallResult:
 
 
 class MemoryRetriever:
-    def __init__(self, service, index=None, limit=12):
-        self.service, self.index, self.limit = service, index, limit
+    def __init__(self, search: MemorySearch, limit: int = 24):
+        self.search = search
+        self.limit = limit
 
-    def recall(self, query, *, purpose="answer", identity=None, items=None):
-        views = memory_views(self.service.inventory() if items is None else items)
-        if purpose == "answer":
-            views = [v for v in views if v.status in ("current", "historical")]
-        by_id = {v.id: v for v in views}
-        ranked, diagnostics = {}, []
+    def has_documents(self) -> bool:
+        return self.search.has_documents()
 
-        def enter(view, reason, rank=None):
-            candidate = ranked.setdefault(view.id, RecalledMemory(view))
+    def recall(self, query: str, *, purpose: str = "answer", identity=None) -> RecallResult:
+        statuses = ("current", "historical") if purpose == "answer" else (
+            "current", "historical", "revoked", "expired"
+        )
+        ranked: dict[str, RecalledMemory] = {}
+        diagnostics: list[str] = []
+        window = self.limit * 4
+
+        def enter(document: SearchDocument, reason: str, rank: int | None = None):
+            candidate = ranked.setdefault(document.id, RecalledMemory(document))
             if reason not in candidate.reasons:
                 candidate.reasons.append(reason)
             if rank is not None:
                 candidate.score += 1 / (60 + rank)
 
-        tokens = lexical_tokens(query)
-        corpus = [lexical_tokens(v.text) for v in views]
-        if tokens and corpus and any(corpus):
-            scores = BM25Okapi(corpus).get_scores(tokens)
-            matches = [i for i in range(len(views)) if set(tokens).intersection(corpus[i])]
-            for rank, i in enumerate(sorted(matches, key=lambda i: scores[i], reverse=True)[:self.limit], 1):
-                enter(views[i], "lexical", rank)
-        if self.index and views:
-            if not self.index.covers(views):
-                diagnostics.append("semantic_projection_incomplete")
+        for rank, document in enumerate(self.search.search_lexical(query, window, statuses), 1):
+            enter(document, "lexical", rank)
+
+        if self.search.semantic_enabled:
             try:
-                for rank, (item_id, _, parent_version) in enumerate(self.index.search(query, self.limit), 1):
-                    view = by_id.get(item_id)
-                    if view and view.parent_version == parent_version:
-                        enter(view, "semantic", rank)
-                    else:
-                        diagnostics.append("semantic_projection_stale")
+                for rank, document in enumerate(self.search.search_semantic(query, window, statuses), 1):
+                    enter(document, "semantic", rank)
             except Exception:
-                # External embedding service is a boundary; do not silently call this a complete recall.
                 logger.exception("Semantic memory recall unavailable")
                 diagnostics.append("semantic_unavailable")
-        elif views:
+        elif self.search.has_documents():
             diagnostics.append("semantic_not_configured")
 
-        hybrid = sorted(ranked.values(), key=lambda c: c.score, reverse=True)[:self.limit]
-        ranked = {c.view.id: c for c in hybrid}
-        for view in views:
-            if identity and view.assertion and view.assertion.identity() == identity:
-                enter(view, "identity")
-            if purpose == "answer" and view.status == "current":
-                # A separate catalog lane, not constrained by topical top-k. Step 11 judges usefulness.
-                enter(view, "task_background_catalog")
-        return RecallResult(list(ranked.values()), list(dict.fromkeys(diagnostics)))
+        hybrid = sorted(ranked.values(), key=lambda candidate: candidate.score, reverse=True)[:self.limit]
+        ranked = {candidate.view.id: candidate for candidate in hybrid}
+        if purpose == "answer":
+            for document in self.search.current_documents():
+                enter(document, "task_background_catalog")
+        if identity:
+            for document in self.search.search_identity(identity, statuses):
+                enter(document, "identity")
+        return RecallResult(list(ranked.values()), diagnostics)

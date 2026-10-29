@@ -9,7 +9,6 @@ from uuid import NAMESPACE_URL, uuid5
 from human_chat.logging_config import get_logger
 from human_chat.memory.formation import FormationPlan
 
-
 logger = get_logger(__name__)
 
 
@@ -64,23 +63,14 @@ class MemoryJobs:
         with self._lock:
             return self._db.execute("SELECT status FROM memory_jobs WHERE id=?", (job_id,)).fetchone()[0] == "done"
 
-    def forget(self, item):
-        """Erase queued plan payloads referencing the deleted record or its evidence."""
-        with self._lock, self._db:
-            rows = self._db.execute("SELECT id,source_id,plan FROM memory_jobs WHERE status!='done'").fetchall()
-            for row in rows:
-                plan = FormationPlan.model_validate_json(row["plan"]) if row["plan"] else None
-                if row["source_id"] in item.seen_sources or (plan and any(op.target_id == item.id for op in plan.operations)):
-                    self.finish(row["id"], "discarded_after_deletion")
-
     def close(self):
         self._db.close()
 
 
 class MemoryWorker:
-    def __init__(self, jobs, formation, service, load_source, index=None, *, enabled=True):
+    def __init__(self, jobs, formation, service, load_source, *, enabled=True):
         self.jobs, self.formation, self.service = jobs, formation, service
-        self.load_source, self.index = load_source, index
+        self.load_source = load_source
         self.enabled = enabled
         self._wake, self._stop = Event(), Event()
         self._thread = None
@@ -119,15 +109,8 @@ class MemoryWorker:
         return True
 
     def _run(self):
-        next_index_attempt = 0
         while not self._stop.is_set():
             processed = self.process_one()
-            if self.index is not None and time.monotonic() >= next_index_attempt:
-                try:
-                    self.index.sync(self.service)
-                except Exception:
-                    logger.exception("Memory index synchronization failed")
-                    next_index_attempt = time.monotonic() + 60
             if not processed:
                 self._wake.wait(5)
                 self._wake.clear()

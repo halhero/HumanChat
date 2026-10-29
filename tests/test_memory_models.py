@@ -1,21 +1,11 @@
-from human_chat.memory.models import LongTermMemory, create_default_memory
+from human_chat.memory.models import MemoryItem
 
 
-def test_long_term_memory_migrates_legacy_categories():
-    memory = LongTermMemory(
-        preferences=["偏好"],
-        facts=["事实"],
-        notes=["备注"],
-    )
+def test_memory_item_keeps_independent_history_and_evidence_lists():
+    first = MemoryItem(text="第一条", last_operation_id="operation-1")
+    second = MemoryItem(text="第二条")
 
-    assert [item.text for item in memory.items] == ["偏好", "事实", "备注"]
-    assert all(item.source == "legacy" for item in memory.items)
+    first.context_message_ids.append("message-1")
 
-
-def test_default_memory_returns_independent_instances():
-    first = create_default_memory()
-    second = create_default_memory()
-
-    assert first.items == []
-    assert second.items == []
-    assert first.items is not second.items
+    assert first.last_operation_id == "operation-1"
+    assert second.context_message_ids == []

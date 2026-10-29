@@ -1,26 +1,30 @@
 """Process-scoped HumanChat application and managed resource composition."""
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, Literal
+from typing import Any, Literal
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import RunControl
 from langgraph.types import Command
 
-from human_chat.checkpointing import CheckpointerResource, open_checkpointer
 from human_chat.character import load_character
+from human_chat.checkpointing import CheckpointerResource, open_checkpointer
 from human_chat.config import Settings
 from human_chat.graph import build_graph
+from human_chat.llm import create_chat_model
 from human_chat.logging_config import get_logger
-from human_chat.memory.resources import MemoryResource, open_memory_resource
 from human_chat.memory.context import MemoryContextBuilder
 from human_chat.memory.formation import MemoryFormation
 from human_chat.memory.jobs import MemoryJobs, MemoryWorker
-from human_chat.memory.repository import default_memory_namespace, memory_path_for_namespace
 from human_chat.memory.request import recent_history
+from human_chat.memory.resources import (
+    MemoryResource,
+    memory_sidecar_path,
+    open_memory_resource,
+)
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.llm import create_chat_model
 from human_chat.messages import SourceBatch, history_sources, new_source
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
@@ -34,7 +38,6 @@ from human_chat.voice import (
     VoiceResource,
     open_voice_resource,
 )
-
 
 logger = get_logger(__name__)
 
@@ -101,11 +104,10 @@ class HumanChatApplication:
         self._memory_jobs = None
 
     def start_memory_worker(self, formation):
-        path = memory_path_for_namespace(self._settings.memory_path, default_memory_namespace(self._settings)).with_suffix(".jobs.sqlite")
+        path = memory_sidecar_path(self._settings.memory_path, "jobs")
         self._memory_jobs = MemoryJobs(path if self._checkpoint.persistent else None)
-        self._memory.service.on_delete(self._memory_jobs.forget)
         self._memory_worker = MemoryWorker(self._memory_jobs, formation, self._memory.service,
-                                           self._load_memory_source, self._memory.index,
+                                           self._load_memory_source,
                                            enabled=self._settings.memory_extraction_enabled)
         # Reconcile completed checkpoint sources before starting the worker. This closes
         # the gap between a Graph commit and registration in the separate job database.
@@ -117,7 +119,6 @@ class HumanChatApplication:
     def close_memory_worker(self):
         if self._memory_worker:
             self._memory_worker.close()
-        self._memory.service.on_delete(None)
         if self._memory_jobs:
             self._memory_jobs.close()
 
@@ -389,36 +390,38 @@ def open_human_chat_application(
 
     repository = session_repository or create_session_repository(settings)
     character = load_character(settings.character_path)
-    with open_checkpointer(settings, backend=checkpoint_backend) as checkpoint:
-        with open_memory_resource(settings) as memory:
-            with open_tool_registry(settings) as tool_registry:
-                with open_voice_resource(settings, character) as voice:
-                    retriever = MemoryRetriever(memory.service, memory.index)
-                    memory_llm = create_chat_model(settings, for_memory=True)
-                    graph = build_graph(
-                        settings,
-                        checkpointer=checkpoint.saver,
-                        memory_service=memory.service,
-                        tool_registry=tool_registry,
-                        character=character,
-                        context_builder=MemoryContextBuilder(retriever, memory_llm, settings),
-                    )
-                    application = HumanChatApplication(
-                        settings=settings,
-                        graph=graph,
-                        session_repository=repository,
-                        checkpoint=checkpoint,
-                        memory=memory,
-                        tool_registry=tool_registry,
-                        voice=voice,
-                    )
-                    try:
-                        if settings.memory_extraction_enabled or memory.index is not None:
-                            formation = MemoryFormation(memory.service, memory_llm, settings, retriever)
-                            application.start_memory_worker(formation if settings.memory_extraction_enabled else None)
-                        yield application
-                    finally:
-                        application.close_memory_worker()
+    with (
+        open_checkpointer(settings, backend=checkpoint_backend) as checkpoint,
+        open_memory_resource(settings) as memory,
+        open_tool_registry(settings) as tool_registry,
+        open_voice_resource(settings, character) as voice,
+    ):
+        retriever = MemoryRetriever(memory.search, settings.memory_recall_limit)
+        memory_llm = create_chat_model(settings, for_memory=True)
+        graph = build_graph(
+            settings,
+            checkpointer=checkpoint.saver,
+            memory_service=memory.service,
+            tool_registry=tool_registry,
+            character=character,
+            context_builder=MemoryContextBuilder(retriever, memory_llm, settings),
+        )
+        application = HumanChatApplication(
+            settings=settings,
+            graph=graph,
+            session_repository=repository,
+            checkpoint=checkpoint,
+            memory=memory,
+            tool_registry=tool_registry,
+            voice=voice,
+        )
+        try:
+            if settings.memory_extraction_enabled:
+                formation = MemoryFormation(memory.service, memory_llm, settings, retriever)
+                application.start_memory_worker(formation)
+            yield application
+        finally:
+            application.close_memory_worker()
 
 
 def _message_text(message) -> str:

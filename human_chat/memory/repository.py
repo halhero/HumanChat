@@ -1,45 +1,30 @@
+"""Canonical memory persistence with bounded, ID-directed reads."""
+
 import json
-import re
+import sqlite3
 from pathlib import Path
-from typing import Protocol
-from uuid import uuid4
-from contextlib import contextmanager
 from threading import RLock
-import os
+from typing import Protocol
 
 from human_chat.config import Settings
-from human_chat.memory.models import LongTermMemory, MemoryItem, create_default_memory
-
+from human_chat.memory.models import MemoryItem
 
 MemoryNamespace = tuple[str, ...]
-_LOCKS = {}
-_LOCKS_GUARD = RLock()
-
-
-@contextmanager
-def repository_lock(key):
-    with _LOCKS_GUARD:
-        lock = _LOCKS.setdefault(key, RLock())
-    with lock:
-        yield
 
 
 def default_memory_namespace(settings: Settings) -> MemoryNamespace:
     return ("users", settings.memory_user_id, "memory")
 
 
+def namespace_key(namespace: MemoryNamespace) -> str:
+    return json.dumps(namespace, ensure_ascii=False, separators=(",", ":"))
+
+
 class MemoryRepository(Protocol):
-    def locked(self, namespace: MemoryNamespace):
+    def get_item(self, namespace: MemoryNamespace, item_id: str) -> MemoryItem | None:
         ...
 
-    def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
-        ...
-
-    def get_item(
-        self,
-        namespace: MemoryNamespace,
-        item_id: str,
-    ) -> MemoryItem | None:
+    def get_items(self, namespace: MemoryNamespace, item_ids: list[str]) -> list[MemoryItem]:
         ...
 
     def upsert_item(self, namespace: MemoryNamespace, item: MemoryItem) -> None:
@@ -49,110 +34,86 @@ class MemoryRepository(Protocol):
         ...
 
 
-class JsonMemoryRepository:
-    def __init__(self, base_path: Path):
-        self.base_path = base_path
+class SqliteMemoryRepository:
+    """Local canonical store; one row is one complete MemoryItem."""
 
-    def locked(self, namespace):
-        return repository_lock(("json", os.path.normcase(str(memory_path_for_namespace(self.base_path, namespace).resolve()))))
+    def __init__(self, path: Path | None):
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
+        self._db = sqlite3.connect(str(path) if path else ":memory:", check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        self._lock = RLock()
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("""CREATE TABLE IF NOT EXISTS memory_items (
+            namespace TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            PRIMARY KEY (namespace, item_id)
+        )""")
+        self._db.commit()
 
-    def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
-        return list(self._load_memory(namespace).items)
+    def get_item(self, namespace: MemoryNamespace, item_id: str) -> MemoryItem | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM memory_items WHERE namespace=? AND item_id=?",
+                (namespace_key(namespace), item_id),
+            ).fetchone()
+        return MemoryItem.model_validate_json(row["payload"]) if row else None
 
-    def get_item(
-        self,
-        namespace: MemoryNamespace,
-        item_id: str,
-    ) -> MemoryItem | None:
-        return next(
-            (
-                item
-                for item in self._load_memory(namespace).items
-                if item.id == item_id
-            ),
-            None,
-        )
+    def get_items(self, namespace: MemoryNamespace, item_ids: list[str]) -> list[MemoryItem]:
+        ordered_ids = list(dict.fromkeys(item_ids))
+        if not ordered_ids:
+            return []
+        placeholders = ",".join("?" for _ in ordered_ids)
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT item_id,payload FROM memory_items WHERE namespace=? AND item_id IN ({placeholders})",
+                (namespace_key(namespace), *ordered_ids),
+            ).fetchall()
+        by_id = {row["item_id"]: MemoryItem.model_validate_json(row["payload"]) for row in rows}
+        return [by_id[item_id] for item_id in ordered_ids if item_id in by_id]
 
     def upsert_item(self, namespace: MemoryNamespace, item: MemoryItem) -> None:
-        memory = self._load_memory(namespace)
-        memory.items = [existing for existing in memory.items if existing.id != item.id]
-        memory.items.append(item)
-        self._save_memory(namespace, memory)
-
-    def delete_item(self, namespace: MemoryNamespace, item_id: str) -> bool:
-        memory = self._load_memory(namespace)
-        original_count = len(memory.items)
-        memory.items = [item for item in memory.items if item.id != item_id]
-        if len(memory.items) == original_count:
-            return False
-        self._save_memory(namespace, memory)
-        return True
-
-    def _load_memory(self, namespace: MemoryNamespace) -> LongTermMemory:
-        path = memory_path_for_namespace(self.base_path, namespace)
-        if not path.exists():
-            memory = create_default_memory()
-            self._save_memory(namespace, memory)
-            return memory
-
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return LongTermMemory(**data)
-
-    def _save_memory(
-        self,
-        namespace: MemoryNamespace,
-        memory: LongTermMemory,
-    ) -> None:
-        path = memory_path_for_namespace(self.base_path, namespace)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-        try:
-            temporary_path.write_text(
-                json.dumps(_model_to_dict(memory), ensure_ascii=False, indent=2),
-                encoding="utf-8",
+        with self._lock, self._db:
+            self._db.execute(
+                """INSERT INTO memory_items(namespace,item_id,version,status,payload)
+                   VALUES(?,?,?,?,?)
+                   ON CONFLICT(namespace,item_id) DO UPDATE SET
+                     version=excluded.version,status=excluded.status,payload=excluded.payload""",
+                (namespace_key(namespace), item.id, item.version, item.status, item.model_dump_json()),
             )
-            temporary_path.replace(path)
-        finally:
-            temporary_path.unlink(missing_ok=True)
+
+    def delete_item(self, namespace: MemoryNamespace, item_id: str) -> bool:
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "DELETE FROM memory_items WHERE namespace=? AND item_id=?",
+                (namespace_key(namespace), item_id),
+            )
+        return cursor.rowcount > 0
+
+    def close(self) -> None:
+        self._db.close()
 
 
 class LangGraphMemoryRepository:
+    """Canonical adapter for LangGraph stores; reads stay bounded by supplied IDs."""
+
     def __init__(self, store):
         self.store = store
 
-    def locked(self, namespace):
-        return repository_lock(("store", id(self.store), namespace))
-
-    def list_items(self, namespace: MemoryNamespace) -> list[MemoryItem]:
-        # BaseStore.search defaults to ten results and matches namespace prefixes.
-        # Fetch all pages but do not merge a child namespace into this memory scope.
-        items = []
-        offset = 0
-        page_size = 100
-        while True:
-            page = self.store.search(namespace, limit=page_size, offset=offset)
-            items.extend(
-                _memory_item_from_store(stored)
-                for stored in page
-                if tuple(stored.namespace) == namespace
-            )
-            if len(page) < page_size:
-                break
-            offset += len(page)
-        return sorted(items, key=lambda item: item.created_at or "")
-
-    def get_item(
-        self,
-        namespace: MemoryNamespace,
-        item_id: str,
-    ) -> MemoryItem | None:
+    def get_item(self, namespace: MemoryNamespace, item_id: str) -> MemoryItem | None:
         stored = self.store.get(namespace, item_id)
-        if stored is None:
-            return None
-        return _memory_item_from_store(stored)
+        return _memory_item_from_store(stored) if stored else None
+
+    def get_items(self, namespace: MemoryNamespace, item_ids: list[str]) -> list[MemoryItem]:
+        items = [self.get_item(namespace, item_id) for item_id in dict.fromkeys(item_ids)]
+        return [item for item in items if item is not None]
 
     def upsert_item(self, namespace: MemoryNamespace, item: MemoryItem) -> None:
-        self.store.put(namespace, item.id, _model_to_dict(item))
+        self.store.put(namespace, item.id, item.model_dump(mode="json"))
 
     def delete_item(self, namespace: MemoryNamespace, item_id: str) -> bool:
         if self.store.get(namespace, item_id) is None:
@@ -161,36 +122,7 @@ class LangGraphMemoryRepository:
         return True
 
 
-def memory_path_for_namespace(base_path: Path, namespace: MemoryNamespace) -> Path:
-    if namespace == ("users", "default", "memory"):
-        return base_path
-
-    if len(namespace) >= 2 and namespace[0] == "users":
-        user_id = _safe_path_segment(namespace[1])
-        return base_path.with_name(f"{base_path.stem}.{user_id}{base_path.suffix}")
-
-    namespace_suffix = ".".join(_safe_path_segment(part) for part in namespace)
-    return base_path.with_name(f"{base_path.stem}.{namespace_suffix}{base_path.suffix}")
-
-
-def _safe_path_segment(value: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value.strip())
-    return normalized.strip("._") or "default"
-
-
 def _memory_item_from_store(stored) -> MemoryItem:
-    value = dict(_stored_value(stored))
-    value.setdefault("id", _stored_key(stored))
+    value = dict(stored.value)
+    value.setdefault("id", stored.key)
     return MemoryItem(**value)
-
-
-def _stored_value(stored) -> dict:
-    return stored.value
-
-
-def _stored_key(stored) -> str:
-    return stored.key
-
-
-def _model_to_dict(model) -> dict:
-    return model.model_dump(mode="json")

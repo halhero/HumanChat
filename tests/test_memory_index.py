@@ -1,47 +1,46 @@
 from langchain_core.embeddings import Embeddings
 
-from human_chat.memory.index import MemoryIndex, memory_views
-from human_chat.memory.repository import JsonMemoryRepository
+from human_chat.memory.repository import SqliteMemoryRepository
+from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from tests.test_memory_maintenance import operation, remember
 
 
-class CountingEmbeddings(Embeddings):
-    """Deterministic adapter test double, not a semantic accuracy model."""
+class KeywordEmbeddings(Embeddings):
     def __init__(self):
-        self.calls = 0
-        self.during_embed = None
+        self.document_batches = []
+
+    @staticmethod
+    def vector(text):
+        lowered = text.casefold()
+        return [float("python" in lowered), float("rust" in lowered), 1.0]
 
     def embed_documents(self, texts):
-        self.calls += 1
-        if self.during_embed:
-            self.during_embed()
-        return [[len(text), 1.0] for text in texts]
+        self.document_batches.append(list(texts))
+        return [self.vector(text) for text in texts]
 
     def embed_query(self, text):
-        return [len(text), 1.0]
+        return self.vector(text)
 
 
-def test_snapshot_reuse_and_delete_during_slow_sync(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "memory.json"), ("users", "default", "memory"))
-    embeddings = CountingEmbeddings()
-    path = tmp_path / "index.json"
-    index = MemoryIndex(embeddings, path, "test")
-    service.attach_index(index)
-    first = remember(service, "Only local synthetic content")
-    assert not index.covers(memory_views(service.inventory()))
-    assert index.sync(service)
-    assert index.covers(memory_views(service.inventory()))
-    reloaded = MemoryIndex(embeddings, path, "test")
-    assert reloaded.sync(service) and embeddings.calls == 1
-    second = remember(service, "Must not survive deletion")
+def test_search_projection_updates_one_parent_and_survives_reopen(tmp_path):
+    repository = SqliteMemoryRepository(tmp_path / "memory.sqlite")
+    embeddings = KeywordEmbeddings()
+    path = tmp_path / "memory.search.sqlite"
+    search = SqliteMemorySearch(path, embeddings, "test-model")
+    service = LongTermMemoryService(repository, ("users", "default", "memory"), search)
 
-    def delete_during_embed():
-        assert service.apply(operation("delete", second=2, kind="delete", target=second)).outcome == "applied"
+    python = remember(service, "Python项目使用FastAPI")
+    rust = remember(service, "Rust项目使用Axum")
+    assert len(embeddings.document_batches) == 2
+    assert search.search_lexical("FastAPI", 10, ("current",))[0].parent_id == python.id
+    assert search.search_semantic("Python", 10, ("current",))[0].parent_id == python.id
 
-    embeddings.during_embed = delete_during_embed
-    assert not index.sync(service)
-    assert second.text not in path.read_text(encoding="utf-8")
-    embeddings.during_embed = None
-    assert index.sync(service)
-    assert index.search(first.text)[0][0] == f"{first.id}@1"
+    assert service.apply(operation("delete-rust", second=2, kind="delete", target=rust)).outcome == "applied"
+    assert all(document.parent_id != rust.id for document in search.search_lexical("Rust", 10, ("current",)))
+    search.close()
+
+    reopened = SqliteMemorySearch(path, embeddings, "test-model")
+    assert reopened.search_semantic("Python", 10, ("current",))[0].parent_id == python.id
+    reopened.close()
+    repository.close()

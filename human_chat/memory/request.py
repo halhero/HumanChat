@@ -5,14 +5,15 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from human_chat.memory.index import memory_views
+from human_chat.memory.search import documents_for_item
 from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
 
 
 def context_references(context):
     return {"task": context.task, "diagnostics": context.diagnostics,
             "bundles": [{"id": b.id, "critical": b.critical, "required": b.required,
-                         "entries": [{"id": c.view.id, "parent_version": c.view.parent_version,
+                         "entries": [{"id": c.view.id, "parent_id": c.view.parent_id,
+                                      "parent_version": c.view.parent_version,
                                       "purpose": d.purpose} for c, d in b.entries]}
                         for b in context.bundles]}
 
@@ -40,7 +41,16 @@ def assemble_request(system_prompt, history, current, references, service, tools
     schemas = [convert_to_openai_tool(tool) for tool in tools]
     available = settings.chat_context_tokens - settings.chat_output_tokens
     diagnostics = list(references.get("diagnostics", []))
-    views = {v.id: v for v in memory_views(service.inventory())} if references.get("bundles") else {}
+    parent_ids = list(dict.fromkeys(
+        entry["parent_id"]
+        for bundle in references.get("bundles", [])
+        for entry in bundle["entries"]
+    ))
+    views = {
+        document.id: document
+        for item in service.get_items(parent_ids)
+        for document in documents_for_item(item)
+    }
     selected, selected_history = [], []
 
     def request(records, previous):
@@ -58,7 +68,8 @@ def assemble_request(system_prompt, history, current, references, service, tools
         records = []
         for entry in bundle["entries"]:
             view = views.get(entry["id"])
-            if (view is None or view.parent_version != entry["parent_version"]
+            if (view is None or view.parent_id != entry["parent_id"]
+                    or view.parent_version != entry["parent_version"]
                     or view.status not in ("current", "historical")
                     or (view.status == "historical" and entry["purpose"] != "history")):
                 records = []

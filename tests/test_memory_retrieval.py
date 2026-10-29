@@ -1,27 +1,50 @@
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.repository import JsonMemoryRepository
-from human_chat.memory.service import LongTermMemoryService
-from tests.test_memory_maintenance import operation, remember
+from human_chat.memory.search import SearchDocument
 
 
-def test_task_catalog_survives_topical_top_k_and_stale_vectors(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
-    guidance = remember(service, "代码审查时先给出风险结论")
-    topic = remember(service, "Python Python Python")
+def document(name, *, identity=None):
+    return SearchDocument(
+        id=f"{name}@1",
+        parent_id=name,
+        parent_version=1,
+        version=1,
+        text=name,
+        status="current",
+        assertion=None,
+        observed_at=None,
+        identity_key=identity,
+    )
 
-    class StaleIndex:
-        def covers(self, views):
-            return False
 
-        def search(self, query, limit):
-            return [(f"{guidance.id}@1", 0.99, 99)]
+def test_hybrid_recall_merges_bm25_vectors_and_exact_identity():
+    lexical_only = document("lexical")
+    shared = document("shared")
+    semantic_only = document("semantic")
+    exact = document("identity")
 
-    retriever = MemoryRetriever(service, StaleIndex(), limit=1)
-    result = retriever.recall("Python")
-    candidates = {c.view.parent_id: c for c in result.candidates}
-    assert "task_background_catalog" in candidates[guidance.id].reasons
-    assert "semantic" not in candidates[guidance.id].reasons
-    assert "lexical" in candidates[topic.id].reasons
-    assert result.diagnostics == ["semantic_projection_incomplete", "semantic_projection_stale"]
-    assert service.apply(operation("delete", second=2, kind="delete", target=guidance)).outcome == "applied"
-    assert all(c.view.parent_id != guidance.id for c in retriever.recall("代码审查").candidates)
+    class Search:
+        semantic_enabled = True
+
+        def search_lexical(self, query, limit, statuses):
+            return [lexical_only, shared]
+
+        def search_semantic(self, query, limit, statuses):
+            return [shared, semantic_only]
+
+        def search_identity(self, identity, statuses):
+            return [exact]
+
+        def current_documents(self):
+            return []
+
+        def has_documents(self):
+            return True
+
+    result = MemoryRetriever(Search(), limit=2).recall(
+        "query", purpose="maintenance", identity=("user", "目标", "")
+    )
+    candidates = {candidate.view.parent_id: candidate for candidate in result.candidates}
+
+    assert set(candidates) == {"shared", "lexical", "identity"}
+    assert candidates["shared"].reasons == ["lexical", "semantic"]
+    assert candidates["identity"].reasons == ["identity"]

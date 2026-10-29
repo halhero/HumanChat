@@ -10,8 +10,9 @@ from human_chat.memory.formation import (
     Review,
 )
 from human_chat.memory.models import Assertion
-from human_chat.memory.repository import JsonMemoryRepository
+from human_chat.memory.repository import SqliteMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever, RecallResult
+from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.messages import SourceBatch, new_source
 from tests.test_memory_maintenance import operation
@@ -31,6 +32,16 @@ class ScriptedModel:
         return self.schema.model_validate(self.results.pop(0))
 
 
+def create_memory(tmp_path):
+    search = SqliteMemorySearch(None)
+    service = LongTermMemoryService(
+        SqliteMemoryRepository(tmp_path / "memory.sqlite"),
+        ("users", "default", "memory"),
+        search,
+    )
+    return service, search
+
+
 def test_untrusted_quote_and_nonasserted_claims_are_not_grounded():
     source = new_source("我喜欢Python", user_id="default", session_id="s1")
     base = Candidate(text="用户喜欢Python", assertion=Assertion(subject="user", relation="喜欢", value="Python"),
@@ -48,7 +59,7 @@ def test_untrusted_quote_and_nonasserted_claims_are_not_grounded():
 
 
 def test_review_cannot_patch_unsupported_deadline_and_plan_is_replayable(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
+    service, search = create_memory(tmp_path)
     source = new_source("我的目标是完成HumanChat，年底前完成", user_id="default", session_id="s1")
     candidate = Candidate(text=source.content, assertion=Assertion(subject="HumanChat", relation="目标", value="完成HumanChat", deadline="年底"),
                           subject_kind="project", modality="asserted", intent="assert", supplied_fields=["value", "deadline"],
@@ -56,12 +67,13 @@ def test_review_cannot_patch_unsupported_deadline_and_plan_is_replayable(tmp_pat
     model = ScriptedModel([Extraction(candidates=[candidate]).model_dump(),
                            Review(decisions=[Decision(candidate_id="candidate-0", verdict="supported", reason="明确目标",
                                                       reviewed_assertion=candidate.assertion)]).model_dump()])
-    formation = MemoryFormation(service, model, Settings(), MemoryRetriever(service))
+    formation = MemoryFormation(service, model, Settings(), MemoryRetriever(search))
     plan = formation.prepare(SourceBatch(user_id="default", new_messages=[source]), "job-1")
     assert len(model.calls) == 2 and len(plan.operations) == 1
-    assert service.apply(plan.operations[0]).outcome == "applied"
+    applied = service.apply(plan.operations[0])
+    assert applied.outcome == "applied"
     assert service.apply(plan.operations[0]).outcome == "already_applied"
-    item = service.load().items[0]
+    item = service.get_item(applied.item_id)
     pause = new_source("这个目标暂停", user_id="default", session_id="s1")
     candidate = candidate.model_copy(update={"text": pause.content, "intent": "change", "supplied_fields": ["state"],
         "assertion": item.assertion.model_copy(update={"state": "暂停", "deadline": None}),
@@ -69,14 +81,14 @@ def test_review_cannot_patch_unsupported_deadline_and_plan_is_replayable(tmp_pat
     model = ScriptedModel([Extraction(candidates=[candidate]).model_dump(),
         Review(decisions=[Decision(candidate_id="candidate-0", verdict="supported", operation="update", target_id=item.id,
                                   fields=["state", "deadline"], reason="错误地试图清空期限", reviewed_assertion=candidate.assertion)]).model_dump()])
-    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(service)).prepare(
+    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(search)).prepare(
         SourceBatch(user_id="default", new_messages=[pause]), "job-2")
     assert plan.operations == [] and plan.diagnostics[0]["reason"] == "unsupported_patch_fields"
-    assert service.load().items[0].assertion.deadline == "年底"
+    assert service.get_item(item.id).assertion.deadline == "年底"
 
 
 def test_review_preserves_task_scope_and_does_not_promote_receipt_time(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
+    service, search = create_memory(tmp_path)
     source = new_source("以后审查代码先说风险", user_id="default", session_id="s1")
     claim = Candidate(text=source.content,
         assertion=Assertion(subject="user", relation="回答方式", value="先说风险", effective_time=source.occurred_at.isoformat()),
@@ -85,20 +97,22 @@ def test_review_preserves_task_scope_and_does_not_promote_receipt_time(tmp_path)
     reviewed = claim.assertion.model_copy(update={"scope": "代码审查", "effective_time": None})
     model = ScriptedModel([Extraction(candidates=[claim]).model_dump(), Review(decisions=[Decision(candidate_id="candidate-0",
         verdict="supported", reviewed_assertion=reviewed, reason="保留原话任务限定，来源时间不是事实时间")]).model_dump()])
-    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(service)).prepare(
+    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(search)).prepare(
         SourceBatch(user_id="default", new_messages=[source]), "scope-review")
-    assert service.apply(plan.operations[0]).outcome == "applied"
-    item = service.load().items[0]
+    applied = service.apply(plan.operations[0])
+    assert applied.outcome == "applied"
+    item = service.get_item(applied.item_id)
     assert item.assertion.scope == "代码审查" and item.assertion.effective_time is None
 
 
 def test_candidates_do_not_share_recalled_records_or_targets(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
-    service.apply(operation("atlas-old", assertion=Assertion(
+    service, search = create_memory(tmp_path)
+    atlas_result = service.apply(operation("atlas-old", assertion=Assertion(
         subject="Atlas", relation="目标", value="完成登录模块")))
-    service.apply(operation("orion-old", assertion=Assertion(
+    orion_result = service.apply(operation("orion-old", assertion=Assertion(
         subject="Orion", relation="部署环境", value="东京")))
-    atlas, orion = service.inventory()
+    atlas = service.get_item(atlas_result.item_id)
+    orion = service.get_item(orion_result.item_id)
     atlas_source = new_source("Atlas目标改为完成权限模块", user_id="default", session_id="s1")
     orion_source = new_source("Orion改为部署到新加坡", user_id="default", session_id="s1")
     candidates = [
@@ -119,7 +133,7 @@ def test_candidates_do_not_share_recalled_records_or_targets(tmp_path):
         ]).model_dump(),
     ])
 
-    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(service)).prepare(
+    plan = MemoryFormation(service, model, Settings(), MemoryRetriever(search)).prepare(
         SourceBatch(user_id="default", new_messages=[atlas_source, orion_source]), "separate-recall")
 
     payload = json.loads(model.calls[1][1].content)
@@ -132,7 +146,7 @@ def test_candidates_do_not_share_recalled_records_or_targets(tmp_path):
 
 
 def test_recall_diagnostic_only_blocks_the_affected_candidate(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
+    service, _ = create_memory(tmp_path)
     service.apply(operation("existing"))
     first_source = new_source("我喜欢Python", user_id="default", session_id="s1")
     second_source = new_source("我喜欢Rust", user_id="default", session_id="s1")
@@ -149,6 +163,9 @@ def test_recall_diagnostic_only_blocks_the_affected_candidate(tmp_path):
         def recall(self, query, **kwargs):
             diagnostics = ["semantic_unavailable"] if query == first_source.content else []
             return RecallResult([], diagnostics)
+
+        def has_documents(self):
+            return True
 
     model = ScriptedModel([
         Extraction(candidates=candidates).model_dump(),

@@ -1,4 +1,4 @@
-"""Judge task usefulness, not a second global topic-similarity ranking."""
+"""Judge the task usefulness of hybrid-recalled memory candidates."""
 
 from dataclasses import dataclass, field
 from typing import Literal
@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 
 from human_chat.logging_config import get_logger
 from human_chat.memory.tokens import MemoryBudgetError, structured_call
-
 
 logger = get_logger(__name__)
 
@@ -45,7 +44,7 @@ ASSESS_PROMPT = """为当前任务选择有用的记忆，不进行统一主题�
 逐条判断用途：constraint约束，guidance处理/表达指导，background项目背景，evidence问题事实，history过去事实。
 决策needed必须保留，optional可用，exclude不适用，uncertain不确定。
 来自task_background_catalog的候选不要求与问题字面或向量相似。
-例如问Python代码，范围为代码审查的“先给风险结论”仍可能needed；问日常生活则不适用。
+例如问Python代码，范围为代码审查的“先给风险结论”可能needed；问日常生活则不适用。
 不要用低主题相关性排除适用约束、目标、阶段和回答方式。也不能仅因为是偏好就无条件保留。
 当前明确要求优先于旧偏好；不同机器/项目/任务范围不混用；不把旧状态当作当前事实。
 只有用户询问过去或需要解释变化时才选择historical作为history；它不能当当前约束。

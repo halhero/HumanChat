@@ -1,7 +1,7 @@
 from human_chat.memory.models import MemoryItem
+from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from tests.test_memory_maintenance import operation, remember
-
 
 TEST_NAMESPACE = ("users", "default", "memory")
 
@@ -9,16 +9,15 @@ TEST_NAMESPACE = ("users", "default", "memory")
 class InMemoryRepository:
     def __init__(self):
         self.items = {}
-
-    def locked(self, namespace):
-        from threading import RLock
-        return RLock()
-
-    def list_items(self, namespace):
-        return list(self.items.values())
+        self.requested_ids = []
 
     def get_item(self, namespace, item_id):
+        self.requested_ids.append(item_id)
         return self.items.get(item_id)
+
+    def get_items(self, namespace, item_ids):
+        self.requested_ids.extend(item_ids)
+        return [self.items[item_id] for item_id in item_ids if item_id in self.items]
 
     def upsert_item(self, namespace, item):
         self.items[item.id] = item
@@ -29,35 +28,30 @@ class InMemoryRepository:
 
 def create_service():
     repository = InMemoryRepository()
-    service = LongTermMemoryService(repository, TEST_NAMESPACE)
-    return service, repository
+    search = SqliteMemorySearch(None)
+    return LongTermMemoryService(repository, TEST_NAMESPACE, search), repository, search
 
 
-def test_add_rejects_duplicate_assertion_without_a_target():
-    service, _ = create_service()
-
-    item = remember(service, "用户喜欢中文讲解。")
-    duplicate = operation("another-source", second=1, assertion=item.assertion)
-    assert service.apply(duplicate).reason == "duplicate_requires_target"
-    assert service.load().items == [item]
-
-
-def test_delete_uses_stable_memory_id():
-    service, _ = create_service()
+def test_delete_reads_only_the_target_and_reuses_stable_memory_id():
+    service, repository, search = create_service()
     first = remember(service, "第一条")
     second = remember(service, "第二条")
+    repository.requested_ids.clear()
 
     deletion = operation("delete-second", second=2, kind="delete", target=second)
     assert service.apply(deletion).outcome == "applied"
-    assert service.load().items == [first]
+    assert repository.requested_ids == [second.id]
+    assert service.get_item(first.id).status == "active"
     assert service.apply(deletion).outcome == "already_applied"
+    search.close()
 
 
-def test_load_returns_repository_items_without_prompt_formatting():
-    service, repository = create_service()
+def test_get_items_preserves_bounded_repository_contract():
+    service, repository, search = create_service()
+    first = MemoryItem(text="一", user_id="default")
+    second = MemoryItem(text="二", user_id="default")
+    repository.items = {first.id: first, second.id: second}
 
-    assert service.load().items == []
-
-    repository.upsert_item(TEST_NAMESPACE, MemoryItem(text="用户正在开发 HumanChat。"))
-
-    assert [item.text for item in service.load().items] == ["用户正在开发 HumanChat。"]
+    assert service.get_items([second.id]) == [second]
+    assert repository.requested_ids == [second.id]
+    search.close()

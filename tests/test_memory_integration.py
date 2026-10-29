@@ -14,7 +14,7 @@ from tests.test_graph import FakeChatModel
 
 def isolated_settings(tmp_path):
     return Settings(openai_api_key="isolated-placeholder", memory_semantic_enabled=False,
-        memory_extraction_enabled=False, session_dir=tmp_path / "sessions", memory_path=tmp_path / "memory.json",
+        memory_extraction_enabled=False, session_dir=tmp_path / "sessions", memory_path=tmp_path / "memory.sqlite",
         checkpoint_path=tmp_path / "checkpoint.sqlite")
 
 
@@ -60,5 +60,5 @@ def test_manual_memory_routes_are_not_exposed(monkeypatch, tmp_path):
         # A mounted frontend catch-all yields 405 for non-GET methods; API-only mode yields 404.
         assert client.post("/api/v1/memories", json={"text": "must-not-be-written"}).status_code in (404, 405)
         assert client.delete("/api/v1/memories/unknown").status_code in (404, 405)
-        service = client.app.state.human_chat_application._memory.service
-        assert service.inventory() == []
+        memory = client.app.state.human_chat_application._memory
+        assert not memory.search.has_documents()

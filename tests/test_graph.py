@@ -3,26 +3,29 @@ import time
 from contextlib import nullcontext
 from threading import Event
 
-import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
+from langgraph.store.memory import InMemoryStore
 
+import human_chat.application as application_module
 import human_chat.graph as graph_module
-from human_chat.config import Settings
-from human_chat.tool_provider import RegisteredTool, ToolRegistry
-from human_chat.tool_provider import ToolPolicy
 from human_chat.application import open_human_chat_application
-from human_chat.conversation import ConversationService, SessionBusyError
-from human_chat.memory.context import Applicability, ContextAssessment, MemoryContextBuilder
+from human_chat.config import Settings
+from human_chat.conversation import ConversationService
+from human_chat.memory.context import (
+    Applicability,
+    ContextAssessment,
+    MemoryContextBuilder,
+)
 from human_chat.memory.formation import FormationPlan, MemoryFormation
 from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import LangGraphMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever
+from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
-from langgraph.store.memory import InMemoryStore
+from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_memory_context import AssessmentModel
 from tests.test_memory_maintenance import remember
-import human_chat.application as application_module
 
 
 class FakeChatModel:
@@ -48,14 +51,19 @@ def lookup_context(value: str) -> str:
 
 def _build_test_graph(monkeypatch, model, registry=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
-    service = LongTermMemoryService(LangGraphMemoryRepository(InMemoryStore()), ("users", "default", "memory"))
+    search = SqliteMemorySearch(None)
+    service = LongTermMemoryService(
+        LangGraphMemoryRepository(InMemoryStore()),
+        ("users", "default", "memory"),
+        search,
+    )
     item = remember(service, "用户希望理解修改原因")
     selector = AssessmentModel(ContextAssessment(task="讲解", memories=[Applicability(id=f"{item.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
     return graph_module.build_graph(
         Settings(memory_extraction_enabled=False),
         memory_service=service,
-        context_builder=MemoryContextBuilder(MemoryRetriever(service), selector, Settings()),
+        context_builder=MemoryContextBuilder(MemoryRetriever(search), selector, Settings()),
         tool_registry=registry or ToolRegistry([]),
     )
 
@@ -122,7 +130,7 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
     settings = Settings(
         openai_api_key="validation-placeholder",
         session_dir=tmp_path / "sessions",
-        memory_path=tmp_path / "memory.json",
+        memory_path=tmp_path / "memory.sqlite",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
         memory_semantic_enabled=False,
     )
@@ -137,14 +145,14 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
                 assert events[-1].type == "turn.completed"
                 assert not any("memory" in event.type or event.type == "review.required" for event in events)
                 assert await asyncio.to_thread(entered.wait, 2)
-                assert application._memory.service.load().items == []
+                assert not application._memory.search.has_documents()
                 assert await first.get_session_turn(session.id) is None
             finally:
                 release.set()
             deadline = time.monotonic() + 3
-            while not application._memory.service.load().items and time.monotonic() < deadline:
+            while not application._memory.search.has_documents() and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
-            assert len(application._memory.service.load().items) == 1
+            assert application._memory.search.has_documents()
             emitted_id = next(
                 event.data["message"]["id"]
                 for event in events if event.type == "message.completed"
@@ -154,7 +162,7 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
 
         with open_human_chat_application(settings) as application:
             recovered = ConversationService(application)
-            assert len(application._memory.service.load().items) == 1
+            assert application._memory.search.has_documents()
             assert application._memory_jobs.next() is None
             assert await recovered.get_session_turn(session.id) is None
             await recovered.shutdown()
@@ -173,7 +181,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
     settings = Settings(
         openai_api_key="validation-placeholder",
         session_dir=tmp_path / "sessions",
-        memory_path=tmp_path / "memory.json",
+        memory_path=tmp_path / "memory.sqlite",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
         memory_extraction_enabled=False,
         memory_semantic_enabled=False,
@@ -188,7 +196,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
             assert events[-1].type == "review.required" and events[-1].data["kind"] == "tool"
             assert await service.cancel_turn(stream.turn_id) == "cancelled"
             assert application.get_pending_review(session.id) is None
-            assert application._memory.service.load().items == []
+            assert not application._memory.search.has_documents()
             assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)
             assert await fresh_service.get_session_turn(session.id) is None
@@ -212,7 +220,7 @@ def test_failed_model_turn_releases_session_for_retry(monkeypatch, tmp_path):
         memory_extraction_enabled=False,
         memory_semantic_enabled=False,
         session_dir=tmp_path / "sessions",
-        memory_path=tmp_path / "memory.json",
+        memory_path=tmp_path / "memory.sqlite",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
     )
 

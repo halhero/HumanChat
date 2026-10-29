@@ -1,9 +1,11 @@
 from human_chat.config import Settings
-from human_chat.memory.context import MemoryContextBuilder, ContextAssessment, Applicability
-from human_chat.memory.repository import JsonMemoryRepository
+from human_chat.memory.context import (
+    Applicability,
+    ContextAssessment,
+    MemoryContextBuilder,
+)
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.service import LongTermMemoryService
-from tests.test_memory_maintenance import remember
+from human_chat.memory.search import SearchDocument
 
 
 class AssessmentModel:
@@ -17,15 +19,36 @@ class AssessmentModel:
         return self.result
 
 
-def test_nontopical_task_guidance_is_protected_but_unrelated_memory_is_not(tmp_path):
-    service = LongTermMemoryService(JsonMemoryRepository(tmp_path / "m.json"), ("users", "default", "memory"))
-    guidance = remember(service, "代码审查时先给风险结论")
-    unrelated = remember(service, "家用电脑是Windows")
+def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
+    guidance = SearchDocument("guidance@1", "guidance", 1, 1, "代码审查先给风险", "current", None, None)
+    unrelated = SearchDocument("unrelated@1", "unrelated", 1, 1, "家用电脑是Windows", "current", None, None)
+
+    class Search:
+        semantic_enabled = False
+
+        def search_lexical(self, query, limit, statuses):
+            return [guidance, unrelated]
+
+        def search_semantic(self, query, limit, statuses):
+            return []
+
+        def search_identity(self, identity, statuses):
+            return []
+
+        def current_documents(self):
+            return [guidance, unrelated]
+
+        def has_documents(self):
+            return True
+
     result = ContextAssessment(task="代码审查", memories=[
-        Applicability(id=f"{guidance.id}@1", purpose="guidance", decision="needed", reason="任务范围适用"),
-        Applicability(id=f"{unrelated.id}@1", purpose="background", decision="exclude", reason="不同任务"),
+        Applicability(id=guidance.id, purpose="guidance", decision="needed", reason="任务范围适用"),
+        Applicability(id=unrelated.id, purpose="background", decision="exclude", reason="不同任务"),
     ])
-    context = MemoryContextBuilder(MemoryRetriever(service, limit=1), AssessmentModel(result), Settings()).build("Python", [])
+    context = MemoryContextBuilder(
+        MemoryRetriever(Search()), AssessmentModel(result), Settings()
+    ).build("Python代码审查", [])
+
     assert len(context.bundles) == 1 and context.bundles[0].critical
     candidate, _ = context.bundles[0].entries[0]
-    assert candidate.view.parent_id == guidance.id and "task_background_catalog" in candidate.reasons
+    assert candidate.view.parent_id == guidance.parent_id

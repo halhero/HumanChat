@@ -1,12 +1,10 @@
-"""Shared memory contracts; repository operations do not infer their meaning."""
+"""Shared contracts for canonical long-term memory records."""
 
-import hashlib
-import json
 from datetime import datetime, timezone
 from typing import Literal
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import uuid4
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 def now_iso():
@@ -73,35 +71,13 @@ class MemoryItem(BaseModel):
     status: Literal["active", "retracted", "deleted"] = "active"
     history: list[MemoryVersion] = Field(default_factory=list)
     observed_at: AwareDatetime | None = None
-    seen_sources: list[str] = Field(default_factory=list)
-    receipts: dict[str, str] = Field(default_factory=dict)
-    suppressed: list[str] = Field(default_factory=list)
-    deleted_at: AwareDatetime | None = None
-    blocked_identity: list[str] = Field(default_factory=list)
+    last_operation_id: str | None = None
 
     def usable_now(self, now=None):
         now = now or datetime.now(timezone.utc)
         return self.status == "active" and not (
             self.assertion and self.assertion.expires_at and self.assertion.expires_at <= now
         )
-
-
-class LongTermMemory(BaseModel):
-    items: list[MemoryItem] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def read_legacy(cls, data):
-        normalized = dict(data)
-        items = list(normalized.get("items", []))
-        for category in ("preferences", "facts", "notes"):
-            for index, text in enumerate(normalized.pop(category, []) or []):
-                items.append(dict(id=uuid5(NAMESPACE_URL, f"legacy:{category}:{index}:{text}").hex,
-                                  text=text, source="legacy", created_at=None, updated_at=None))
-        normalized["items"] = [{"created_at": None, "updated_at": None, **item}
-                               if isinstance(item, dict)
-                               else item for item in items]
-        return normalized
 
 
 PatchField = Literal["value", "negated", "state", "deadline", "effective_time", "expires_at", "scope"]
@@ -111,7 +87,7 @@ class Mutation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
     user_id: str
-    kind: Literal["add", "duplicate", "update", "correct", "retract", "delete", "forbid"]
+    kind: Literal["add", "duplicate", "update", "correct", "retract", "delete"]
     text: str
     assertion: Assertion | None = None
     evidence: list[Evidence] = Field(min_length=1)
@@ -122,23 +98,8 @@ class Mutation(BaseModel):
     revoke_history: bool = False
     reason: str = ""
 
-    def digest(self):
-        return hashlib.sha256(self.model_dump_json(exclude={"id", "reason"}).encode()).hexdigest()
-
-
 class MutationResult(BaseModel):
     operation_id: str
     outcome: Literal["applied", "already_applied", "conflict", "rejected"]
     item_id: str | None = None
     reason: str = ""
-
-
-def fingerprints(text, assertion=None):
-    values = [" ".join(text.split()).casefold()]
-    if assertion:
-        values.append(json.dumps([assertion.identity(), assertion.value, assertion.negated], ensure_ascii=False))
-    return {hashlib.sha256(value.encode()).hexdigest() for value in values if value}
-
-
-def create_default_memory():
-    return LongTermMemory()
