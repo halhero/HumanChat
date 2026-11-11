@@ -289,7 +289,7 @@ Completed replies register background memory jobs. New user messages are evidenc
 previous messages only provide interpretation context. Extraction and semantic review
 produce constrained, version-checked operations. Repeating a durable plan does not repeat
 the write. Changes retain history; corrections revoke errors; explicit deletion removes
-the record payload and its search projection.
+the record payload and its memory index projection.
 
 Saving has no confirmation dialog, progress phase or saved-count event. Tool confirmation
 is unchanged. Automatic maintenance is eventually consistent: an immediate next turn may
@@ -299,7 +299,7 @@ Retrieval combines indexed lexical search and real semantic embeddings. Local le
 uses FTS5 BM25; production vector search uses pgvector HNSW. The two bounded result lists are
 merged with reciprocal-rank fusion before task applicability is judged. Only selected parent
 IDs are read from canonical storage, and those references are rechecked when the final model
-request is assembled. Current lightweight search documents also provide the task-background
+request is assembled. Current lightweight memory index entries also provide the task-background
 catalog so non-topical collaboration constraints are not lost; this does not read canonical
 records, but catalog size remains a separate relevance and token-budget concern.
 
@@ -328,8 +328,8 @@ current Qwen provider they explicitly disable thinking so reasoning cannot consu
 whole structured-output allowance; choose a model that supports this mode.
 
 SQLite is the default canonical backend. The matching `.search.sqlite` and `.jobs.sqlite`
-files beside the configured memory path contain the bounded search projection and durable
-maintenance jobs. Canonical writes update only the affected search documents; application
+files beside the configured memory path contain the bounded memory index projection and durable
+maintenance jobs. Canonical writes update only the affected index entries; application
 startup and idle workers never scan all canonical memory. Existing JSON memory files are
 left untouched and are not migrated automatically. Durable jobs require persistent checkpoints.
 Run only one backend worker. PostgreSQL requires the `vector` extension; its remote service
