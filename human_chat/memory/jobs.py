@@ -25,7 +25,57 @@ class MemoryJobs:
             checkpoint_id TEXT NOT NULL, source_id TEXT NOT NULL, source_time TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending', plan TEXT, attempts INTEGER NOT NULL DEFAULT 0,
             retry_at REAL NOT NULL DEFAULT 0, error TEXT, outcome TEXT)""")
+        self._db.execute("""CREATE TABLE IF NOT EXISTS memory_pending_sources (
+            source_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, thread_id TEXT NOT NULL,
+            source_time TEXT NOT NULL)""")
         self._db.commit()
+
+    def register_pending(self, *, user_id, thread_id, source_id, source_time):
+        with self._lock, self._db:
+            self._db.execute("""INSERT OR REPLACE INTO memory_pending_sources
+                (source_id,user_id,thread_id,source_time) VALUES (?,?,?,?)""",
+                (source_id, user_id, thread_id, str(source_time)))
+
+    def pending_sources(self):
+        with self._lock:
+            return [dict(row) for row in self._db.execute(
+                "SELECT * FROM memory_pending_sources ORDER BY source_time,source_id"
+            ).fetchall()]
+
+    def clear_pending(self, source_id):
+        with self._lock, self._db:
+            self._db.execute(
+                "DELETE FROM memory_pending_sources WHERE source_id=?",
+                (source_id,),
+            )
+
+    def promote_pending(self, source_id, checkpoint_id):
+        with self._lock, self._db:
+            source = self._db.execute(
+                "SELECT * FROM memory_pending_sources WHERE source_id=?",
+                (source_id,),
+            ).fetchone()
+            if source is None:
+                return None
+            job_id = uuid5(
+                NAMESPACE_URL,
+                f'memory-job:{source["user_id"]}:{source_id}',
+            ).hex
+            self._db.execute("""INSERT OR IGNORE INTO memory_jobs
+                (id,user_id,thread_id,checkpoint_id,source_id,source_time)
+                VALUES (?,?,?,?,?,?)""", (
+                    job_id,
+                    source["user_id"],
+                    source["thread_id"],
+                    checkpoint_id,
+                    source_id,
+                    source["source_time"],
+                ))
+            self._db.execute(
+                "DELETE FROM memory_pending_sources WHERE source_id=?",
+                (source_id,),
+            )
+            return job_id
 
     def enqueue(self, *, user_id, thread_id, checkpoint_id, source_id, source_time):
         job_id = uuid5(NAMESPACE_URL, f"memory-job:{user_id}:{source_id}").hex

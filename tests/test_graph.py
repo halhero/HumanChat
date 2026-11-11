@@ -20,6 +20,7 @@ from human_chat.memory.context import (
 )
 from human_chat.memory.formation import FormationPlan, MemoryFormation
 from human_chat.memory.index_store import SqliteMemoryIndexStore
+from human_chat.memory.jobs import MemoryJobs
 from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import LangGraphMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever
@@ -118,7 +119,6 @@ def test_completed_turn_enqueues_known_source_without_converting_history(monkeyp
     enqueued = []
     application = HumanChatApplication.__new__(HumanChatApplication)
     application._settings = Settings(memory_extraction_enabled=True)
-    application._memory_jobs = SimpleNamespace(enqueue=lambda **values: enqueued.append(values))
     application._memory_worker = SimpleNamespace(notify=lambda: None)
     monkeypatch.setattr(
         application_module,
@@ -137,6 +137,12 @@ def test_completed_turn_enqueues_known_source_without_converting_history(monkeyp
         },
         config={"configurable": {"checkpoint_id": "checkpoint"}},
     )
+    application._memory_jobs = SimpleNamespace(
+        promote_pending=lambda source_id, checkpoint_id: enqueued.append({
+            "source_id": source_id,
+            "checkpoint_id": checkpoint_id,
+        }),
+    )
 
     application._enqueue_memory_source(
         SimpleNamespace(id="session", thread_id="session"),
@@ -144,6 +150,64 @@ def test_completed_turn_enqueues_known_source_without_converting_history(monkeyp
     )
 
     assert enqueued[0]["source_id"] == source.id
+
+
+def test_startup_does_not_scan_session_repository(monkeypatch, tmp_path):
+    class NoScanRepository:
+        def list_recent(self, limit=10):
+            raise AssertionError("startup scanned all sessions")
+
+    monkeypatch.setattr(
+        graph_module,
+        "create_chat_model",
+        lambda settings: FakeChatModel([]),
+    )
+    settings = Settings(
+        openai_api_key="validation-placeholder",
+        memory_path=tmp_path / "memory.sqlite",
+        memory_semantic_enabled=False,
+    )
+
+    with open_human_chat_application(
+        settings,
+        session_repository=NoScanRepository(),
+        checkpoint_backend="memory",
+    ):
+        pass
+
+
+def test_startup_recovers_only_registered_pending_source(tmp_path):
+    source = new_source("current", user_id="default", session_id="thread-1")
+    assistant = new_source("reply", user_id="default", session_id="thread-1", role="assistant")
+    snapshot = SimpleNamespace(
+        values={
+            "input_source": source.model_dump(mode="json"),
+            "messages": [source.to_message(), assistant.to_message()],
+        },
+        config={"configurable": {"checkpoint_id": "checkpoint-1"}},
+        interrupts=[],
+    )
+    requested = []
+    application = HumanChatApplication.__new__(HumanChatApplication)
+    application._settings = Settings(memory_extraction_enabled=True)
+    application._memory_jobs = MemoryJobs(tmp_path / "jobs.sqlite")
+    application._memory_jobs.register_pending(
+        user_id="default",
+        thread_id="thread-1",
+        source_id=source.id,
+        source_time=source.occurred_at,
+    )
+    application._graph = SimpleNamespace(get_state=lambda config: (
+        requested.append(config["configurable"]["thread_id"]),
+        snapshot,
+    )[1])
+
+    application._recover_pending_memory_sources()
+
+    assert requested == ["thread-1"]
+    assert application._memory_jobs.pending_sources() == []
+    assert application._memory_jobs.next()["source_id"] == source.id
+    application._memory_jobs.close()
 
 
 def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, tmp_path):
@@ -219,7 +283,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
         session_dir=tmp_path / "sessions",
         memory_path=tmp_path / "memory.sqlite",
         checkpoint_path=tmp_path / "checkpoint.sqlite",
-        memory_extraction_enabled=False,
+        memory_extraction_enabled=True,
         memory_semantic_enabled=False,
     )
 
@@ -232,6 +296,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
             assert events[-1].type == "review.required" and events[-1].data["kind"] == "tool"
             assert await service.cancel_turn(stream.turn_id) == "cancelled"
             assert application.get_pending_review(session.id) is None
+            assert application._memory_jobs.pending_sources() == []
             assert not application._memory.retriever.has_documents()
             assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)

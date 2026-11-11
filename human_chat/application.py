@@ -108,11 +108,7 @@ class HumanChatApplication:
         self._memory_worker = MemoryWorker(self._memory_jobs, formation, self._memory.service,
                                            self._load_memory_source,
                                            enabled=self._settings.memory_extraction_enabled)
-        # Reconcile completed checkpoint sources before starting the worker. This closes
-        # the gap between a Graph commit and registration in the separate job database.
-        for session in self._sessions.list_recent(limit=2**31 - 1):
-            snapshot = self._graph.get_state(self._graph_config(session.thread_id))
-            self._reconcile_memory_sources(session, snapshot)
+        self._recover_pending_memory_sources()
         self._memory_worker.start()
 
     def close_memory_worker(self):
@@ -121,19 +117,42 @@ class HumanChatApplication:
         if self._memory_jobs:
             self._memory_jobs.close()
 
-    def _reconcile_memory_sources(self, session, snapshot):
-        if self._memory_jobs is None or not self._settings.memory_extraction_enabled or not snapshot.values:
+    @staticmethod
+    def _source_completed(snapshot, source_id):
+        messages = snapshot.values.get("messages", []) if snapshot.values else []
+        return (
+            len(messages) >= 2
+            and isinstance(messages[-2], HumanMessage)
+            and messages[-2].id == source_id
+            and isinstance(messages[-1], AIMessage)
+        )
+
+    def _recover_pending_memory_sources(self):
+        for pending in self._memory_jobs.pending_sources():
+            if pending["user_id"] != self._settings.memory_user_id:
+                raise ValueError("Pending memory source belongs to another user")
+            snapshot = self._graph.get_state(self._graph_config(pending["thread_id"]))
+            source_data = snapshot.values.get("input_source") if snapshot.values else None
+            if not source_data or source_data.get("id") != pending["source_id"]:
+                self._memory_jobs.clear_pending(pending["source_id"])
+                continue
+            if self._source_completed(snapshot, pending["source_id"]):
+                checkpoint_id = snapshot.config["configurable"].get("checkpoint_id")
+                if checkpoint_id is not None:
+                    self._memory_jobs.promote_pending(pending["source_id"], checkpoint_id)
+                continue
+            if not snapshot.interrupts:
+                self._memory_jobs.clear_pending(pending["source_id"])
+
+    def _register_pending_memory_source(self, session, source):
+        if self._memory_jobs is None or not self._settings.memory_extraction_enabled:
             return
-        messages = snapshot.values.get("messages", [])
-        sources = history_sources(messages, user_id=self._settings.memory_user_id, session_id=session.id)
-        checkpoint_id = snapshot.config["configurable"].get("checkpoint_id")
-        if checkpoint_id is None:
-            return
-        for index, source in enumerate(sources[:-1]):
-            if source.role == "user" and source.occurred_at and sources[index + 1].role == "assistant":
-                self._memory_jobs.enqueue(user_id=source.user_id, thread_id=session.thread_id,
-                    checkpoint_id=checkpoint_id, source_id=source.id, source_time=source.occurred_at)
-        self._memory_worker.notify()
+        self._memory_jobs.register_pending(
+            user_id=source.user_id,
+            thread_id=session.thread_id,
+            source_id=source.id,
+            source_time=source.occurred_at,
+        )
 
     def _enqueue_memory_source(self, session, snapshot):
         if self._memory_jobs is None or not self._settings.memory_extraction_enabled or not snapshot.values:
@@ -145,19 +164,9 @@ class HumanChatApplication:
         source = SourceMessage.model_validate(source_data)
         if source.user_id != self._settings.memory_user_id or source.session_id != session.id:
             raise ValueError("Memory source identity does not match its session")
-        messages = snapshot.values.get("messages", [])
-        if (source.occurred_at is None or len(messages) < 2
-                or not isinstance(messages[-2], HumanMessage)
-                or messages[-2].id != source.id
-                or not isinstance(messages[-1], AIMessage)):
+        if source.occurred_at is None or not self._source_completed(snapshot, source.id):
             return
-        self._memory_jobs.enqueue(
-            user_id=source.user_id,
-            thread_id=session.thread_id,
-            checkpoint_id=checkpoint_id,
-            source_id=source.id,
-            source_time=source.occurred_at,
-        )
+        self._memory_jobs.promote_pending(source.id, checkpoint_id)
         self._memory_worker.notify()
 
     def _load_memory_source(self, job):
@@ -288,6 +297,9 @@ class HumanChatApplication:
         session = self.get_session(session_id)
         config = self._graph_config(session.thread_id)
         snapshot = self._graph.get_state(config)
+        source_data = snapshot.values.get("input_source") if snapshot.values else None
+        if self._memory_jobs is not None and source_data:
+            self._memory_jobs.clear_pending(source_data["id"])
         if snapshot.next:
             self._graph.update_state(
                 config,
@@ -308,11 +320,15 @@ class HumanChatApplication:
         control: RunControl,
     ) -> Iterator[tuple[str, Any]]:
         session = self.get_session(session_id)
+        source = new_source(
+            question,
+            user_id=self._settings.memory_user_id,
+            session_id=session.id,
+        )
+        self._register_pending_memory_source(session, source)
         yield from self._stream_graph(
             session,
-            {"question": question, "input_source": new_source(
-                question, user_id=self._settings.memory_user_id, session_id=session.id,
-            ).model_dump(mode="json")},
+            {"question": question, "input_source": source.model_dump(mode="json")},
             control=control,
             question=question,
         )
@@ -357,6 +373,12 @@ class HumanChatApplication:
                 yield mode, data
             snapshot = self._graph.get_state(self._graph_config(session.thread_id))
             self._enqueue_memory_source(session, snapshot)
+        except Exception:
+            snapshot = self._graph.get_state(self._graph_config(session.thread_id))
+            source_data = snapshot.values.get("input_source") if snapshot.values else None
+            if self._memory_jobs is not None and source_data:
+                self._memory_jobs.clear_pending(source_data["id"])
+            raise
         finally:
             if latest_state:
                 self._save_session_state(

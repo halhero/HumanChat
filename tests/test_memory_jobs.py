@@ -37,3 +37,26 @@ def test_crash_after_record_commit_reuses_plan_and_idempotent_operation(tmp_path
     jobs.close()
     search.close()
     repository.close()
+
+
+def test_pending_source_is_durable_and_promoted_atomically(tmp_path):
+    path = tmp_path / "jobs.sqlite"
+    jobs = MemoryJobs(path)
+    jobs.register_pending(
+        user_id="default",
+        thread_id="thread-1",
+        source_id="source-1",
+        source_time="2026-01-01",
+    )
+    jobs.close()
+
+    jobs = MemoryJobs(path)
+    assert [source["source_id"] for source in jobs.pending_sources()] == ["source-1"]
+
+    job_id = jobs.promote_pending("source-1", "checkpoint-1")
+
+    assert jobs.pending_sources() == []
+    assert jobs.next()["id"] == job_id
+    assert jobs.promote_pending("source-1", "checkpoint-2") is None
+    assert jobs.next()["checkpoint_id"] == "checkpoint-1"
+    jobs.close()
