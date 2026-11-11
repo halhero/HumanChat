@@ -5,7 +5,6 @@ import json
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from human_chat.memory.search import documents_for_item
 from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
 
 
@@ -37,6 +36,51 @@ def recent_history(messages, budget):
     return selected
 
 
+def _selected_memory_record(entry, item):
+    prefix = f'{entry["parent_id"]}@'
+    entry_id = entry["id"]
+    if not entry_id.startswith(prefix):
+        return None
+    version_text = entry_id[len(prefix):]
+    if not version_text.isdecimal():
+        return None
+    selected_version = int(version_text)
+    if selected_version < 1 or item.version != entry["parent_version"] or item.status == "deleted":
+        return None
+
+    if selected_version == item.version:
+        if not item.usable_now():
+            return None
+        selected = item
+        status = "current"
+        ended_at = None
+    else:
+        selected = next(
+            (version for version in item.history if version.version == selected_version),
+            None,
+        )
+        if selected is None or selected.status != "historical" or entry["purpose"] != "history":
+            return None
+        status = selected.status
+        ended_at = selected.ended_at
+
+    return {
+        "id": entry_id,
+        "parent_id": item.id,
+        "version": selected.version,
+        "text": selected.text,
+        "status": status,
+        "assertion": (
+            selected.assertion.model_dump(mode="json")
+            if selected.assertion
+            else None
+        ),
+        "observed_at": str(selected.observed_at) if selected.observed_at else None,
+        "ended_at": str(ended_at) if ended_at else None,
+        "purpose": entry["purpose"],
+    }
+
+
 def assemble_request(system_prompt, history, current, references, service, tools, settings):
     schemas = [convert_to_openai_tool(tool) for tool in tools]
     available = settings.chat_context_tokens - settings.chat_output_tokens
@@ -46,11 +90,7 @@ def assemble_request(system_prompt, history, current, references, service, tools
         for bundle in references.get("bundles", [])
         for entry in bundle["entries"]
     ))
-    views = {
-        document.id: document
-        for item in service.get_items(parent_ids)
-        for document in documents_for_item(item)
-    }
+    items = {item.id: item for item in service.get_items(parent_ids)}
     selected, selected_history = [], []
 
     def request(records, previous):
@@ -67,14 +107,12 @@ def assemble_request(system_prompt, history, current, references, service, tools
     for bundle in sorted(references.get("bundles", []), key=lambda b: (not b["critical"], not b["required"])):
         records = []
         for entry in bundle["entries"]:
-            view = views.get(entry["id"])
-            if (view is None or view.parent_id != entry["parent_id"]
-                    or view.parent_version != entry["parent_version"]
-                    or view.status not in ("current", "historical")
-                    or (view.status == "historical" and entry["purpose"] != "history")):
+            item = items.get(entry["parent_id"])
+            record = _selected_memory_record(entry, item) if item else None
+            if record is None:
                 records = []
                 break
-            records.append({**view.payload(), "purpose": entry["purpose"]})
+            records.append(record)
         if not records:
             diagnostics.append("context_changed_since_selection")
             continue
