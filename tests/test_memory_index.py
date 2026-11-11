@@ -1,7 +1,7 @@
 from langchain_core.embeddings import Embeddings
 
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.repository import SqliteMemoryRepository
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from tests.test_memory_maintenance import operation, remember
 
@@ -27,7 +27,7 @@ def test_search_projection_updates_one_parent_and_survives_reopen(tmp_path):
     repository = SqliteMemoryRepository(tmp_path / "memory.sqlite")
     embeddings = KeywordEmbeddings()
     path = tmp_path / "memory.search.sqlite"
-    search = SqliteMemorySearch(path, embeddings, "test-model")
+    search = SqliteMemoryIndexStore(path, embeddings, "test-model")
     service = LongTermMemoryService(repository, ("users", "default", "memory"), search)
 
     python = remember(service, "Python项目使用FastAPI")
@@ -40,7 +40,7 @@ def test_search_projection_updates_one_parent_and_survives_reopen(tmp_path):
     assert all(document.parent_id != rust.id for document in search.search_lexical("Rust", 10, ("current",)))
     search.close()
 
-    reopened = SqliteMemorySearch(path, embeddings, "test-model")
+    reopened = SqliteMemoryIndexStore(path, embeddings, "test-model")
     assert reopened.search_semantic("Python", 10, ("current",))[0].parent_id == python.id
     reopened.close()
     repository.close()

@@ -74,7 +74,7 @@ class MemoryContextBuilder:
             context.diagnostics.append("context_assessment_unavailable")
             return context
         context.task = assessment.task
-        candidates = {c.view.id: c for c in recall.candidates}
+        candidates = {c.entry.id: c for c in recall.candidates}
         counts = {key: sum(m.id == key for m in assessment.memories) for key in candidates}
         grouped = {}
         for decision in assessment.memories:
@@ -84,7 +84,7 @@ class MemoryContextBuilder:
                 continue
             if decision.decision in ("exclude", "uncertain"):
                 continue
-            if candidate.view.status != "current" and decision.purpose != "history":
+            if candidate.entry.status != "current" and decision.purpose != "history":
                 context.diagnostics.append("historical_not_current")
                 continue
             key = decision.bundle or decision.id

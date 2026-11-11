@@ -40,7 +40,7 @@ def _identity_key(assertion) -> str | None:
 
 
 @dataclass(frozen=True)
-class SearchDocument:
+class MemoryIndexEntry:
     id: str
     parent_id: str
     parent_version: int
@@ -65,11 +65,11 @@ class SearchDocument:
         }
 
 
-def documents_for_item(item: MemoryItem) -> list[SearchDocument]:
+def _index_entries_for_item(item: MemoryItem) -> list[MemoryIndexEntry]:
     if item.status == "deleted":
         return []
     status = "current" if item.usable_now() else "revoked" if item.status == "retracted" else "expired"
-    documents = [SearchDocument(
+    documents = [MemoryIndexEntry(
         id=f"{item.id}@{item.version}",
         parent_id=item.id,
         parent_version=item.version,
@@ -80,7 +80,7 @@ def documents_for_item(item: MemoryItem) -> list[SearchDocument]:
         observed_at=str(item.observed_at) if item.observed_at else None,
         identity_key=_identity_key(item.assertion),
     )]
-    documents.extend(SearchDocument(
+    documents.extend(MemoryIndexEntry(
         id=f"{item.id}@{version.version}",
         parent_id=item.id,
         parent_version=item.version,
@@ -95,31 +95,33 @@ def documents_for_item(item: MemoryItem) -> list[SearchDocument]:
     return documents
 
 
-class MemorySearch(Protocol):
+class MemoryIndexWriter(Protocol):
+    def upsert_item(self, item: MemoryItem) -> None:
+        ...
+
+
+class MemoryIndexReader(Protocol):
     @property
     def semantic_enabled(self) -> bool:
         ...
 
-    def upsert_item(self, item: MemoryItem) -> None:
+    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         ...
 
-    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         ...
 
-    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         ...
 
-    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[SearchDocument]:
-        ...
-
-    def current_documents(self) -> list[SearchDocument]:
+    def current_documents(self) -> list[MemoryIndexEntry]:
         ...
 
     def has_documents(self) -> bool:
         ...
 
 
-class SqliteMemorySearch:
+class SqliteMemoryIndexStore:
     """Embedded search projection: FTS5 for BM25 and sqlite-vec for KNN."""
 
     def __init__(self, path: Path | None, embeddings=None, configuration: str = ""):
@@ -185,7 +187,7 @@ class SqliteMemorySearch:
         )
 
     def upsert_item(self, item: MemoryItem) -> None:
-        desired = {document.id: document for document in documents_for_item(item)}
+        desired = {entry.id: entry for entry in _index_entries_for_item(item)}
         with self._lock:
             existing_rows = self._db.execute(
                 "SELECT row_id,view_id,text FROM search_documents WHERE parent_id=?",
@@ -200,16 +202,16 @@ class SqliteMemorySearch:
                     tuple(row["row_id"] for row in existing_rows),
                 ).fetchall()}
 
-        needs_embedding = [document for document in desired.values()
-                           if document.id not in existing
-                           or existing[document.id]["text"] != document.text
-                           or existing[document.id]["row_id"] not in vector_rows]
+        needs_embedding = [entry for entry in desired.values()
+                           if entry.id not in existing
+                           or existing[entry.id]["text"] != entry.text
+                           or existing[entry.id]["row_id"] not in vector_rows]
         vectors = []
         if self.semantic_enabled and needs_embedding:
-            vectors = self.embeddings.embed_documents([document.text for document in needs_embedding])
+            vectors = self.embeddings.embed_documents([entry.text for entry in needs_embedding])
             if len(vectors) != len(needs_embedding):
                 raise ValueError("Embedding response count does not match memory documents")
-        vector_by_view = dict(zip((document.id for document in needs_embedding), vectors))
+        vector_by_view = dict(zip((entry.id for entry in needs_embedding), vectors))
 
         with self._lock, self._db:
             if vectors:
@@ -255,7 +257,7 @@ class SqliteMemorySearch:
                         (row_id, sqlite_vec.serialize_float32(vector_by_view[document.id])),
                     )
 
-    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         tokens = lexical_tokens(query)
         if not tokens:
             return []
@@ -271,7 +273,7 @@ class SqliteMemorySearch:
             ).fetchall()
         return [_sqlite_document(row) for row in rows]
 
-    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         if not self.semantic_enabled or not self._vector_table_exists():
             return []
         vector = self.embeddings.embed_query(query)
@@ -290,7 +292,7 @@ class SqliteMemorySearch:
             ).fetchall()
         return [_sqlite_document(row) for row in rows]
 
-    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         placeholders = ",".join("?" for _ in statuses)
         key = json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
         with self._lock:
@@ -300,7 +302,7 @@ class SqliteMemorySearch:
             ).fetchall()
         return [_sqlite_document(row) for row in rows]
 
-    def current_documents(self) -> list[SearchDocument]:
+    def current_documents(self) -> list[MemoryIndexEntry]:
         with self._lock:
             rows = self._db.execute(
                 "SELECT * FROM search_documents WHERE status='current' ORDER BY row_id"
@@ -315,7 +317,7 @@ class SqliteMemorySearch:
         self._db.close()
 
 
-class PostgresMemorySearch:
+class PostgresMemoryIndexStore:
     """Production search projection using PostgreSQL FTS and pgvector HNSW."""
 
     def __init__(self, uri: str, namespace: MemoryNamespace, embeddings=None, configuration: str = ""):
@@ -387,7 +389,7 @@ class PostgresMemorySearch:
         )
 
     def upsert_item(self, item: MemoryItem) -> None:
-        desired = {document.id: document for document in documents_for_item(item)}
+        desired = {entry.id: entry for entry in _index_entries_for_item(item)}
         with self._lock, self._db.cursor() as cursor:
             cursor.execute("""SELECT row_id,view_id,text FROM human_chat_memory_search_documents
                 WHERE namespace=%s AND parent_id=%s""", (self.namespace, item.id))
@@ -434,7 +436,7 @@ class PostgresMemorySearch:
                         VALUES(%s,%s) ON CONFLICT(row_id) DO UPDATE SET embedding=excluded.embedding""",
                         (row_id, np.asarray(vector_by_view[document.id], dtype=np.float32)))
 
-    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_lexical(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         tokens = lexical_tokens(query)
         if not tokens:
             return []
@@ -450,7 +452,7 @@ class PostgresMemorySearch:
             rows = cursor.fetchall()
         return [_postgres_document(row) for row in rows]
 
-    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_semantic(self, query: str, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         if not self.semantic_enabled:
             return []
         vector = np.asarray(self.embeddings.embed_query(query), dtype=np.float32)
@@ -467,7 +469,7 @@ class PostgresMemorySearch:
             rows = cursor.fetchall()
         return [_postgres_document(row) for row in rows]
 
-    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[SearchDocument]:
+    def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         key = json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
         with self._lock, self._db.cursor() as cursor:
             cursor.execute("""SELECT view_id,parent_id,parent_version,view_version,text,status,
@@ -478,7 +480,7 @@ class PostgresMemorySearch:
             rows = cursor.fetchall()
         return [_postgres_document(row) for row in rows]
 
-    def current_documents(self) -> list[SearchDocument]:
+    def current_documents(self) -> list[MemoryIndexEntry]:
         with self._lock, self._db.cursor() as cursor:
             cursor.execute("""SELECT view_id,parent_id,parent_version,view_version,text,status,
                 assertion_json,observed_at,ended_at,identity_key
@@ -497,8 +499,8 @@ class PostgresMemorySearch:
         self._db.close()
 
 
-def _sqlite_document(row) -> SearchDocument:
-    return SearchDocument(
+def _sqlite_document(row) -> MemoryIndexEntry:
+    return MemoryIndexEntry(
         id=row["view_id"], parent_id=row["parent_id"], parent_version=row["parent_version"],
         version=row["view_version"], text=row["text"], status=row["status"],
         assertion=json.loads(row["assertion_json"]) if row["assertion_json"] else None,
@@ -506,11 +508,11 @@ def _sqlite_document(row) -> SearchDocument:
     )
 
 
-def _postgres_document(row) -> SearchDocument:
+def _postgres_document(row) -> MemoryIndexEntry:
     assertion = row[6]
     if isinstance(assertion, str):
         assertion = json.loads(assertion)
-    return SearchDocument(
+    return MemoryIndexEntry(
         id=row[0], parent_id=row[1], parent_version=row[2], version=row[3], text=row[4], status=row[5],
         assertion=assertion, observed_at=row[7], ended_at=row[8], identity_key=row[9],
     )

@@ -4,8 +4,8 @@ from human_chat.memory.context import (
     ContextAssessment,
     MemoryContextBuilder,
 )
+from human_chat.memory.index_store import MemoryIndexEntry
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.search import SearchDocument
 
 
 class AssessmentModel:
@@ -20,8 +20,8 @@ class AssessmentModel:
 
 
 def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
-    guidance = SearchDocument("guidance@1", "guidance", 1, 1, "代码审查先给风险", "current", None, None)
-    unrelated = SearchDocument("unrelated@1", "unrelated", 1, 1, "家用电脑是Windows", "current", None, None)
+    guidance = MemoryIndexEntry("guidance@1", "guidance", 1, 1, "代码审查先给风险", "current", None, None)
+    unrelated = MemoryIndexEntry("unrelated@1", "unrelated", 1, 1, "家用电脑是Windows", "current", None, None)
 
     class Search:
         semantic_enabled = False
@@ -51,4 +51,4 @@ def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
 
     assert len(context.bundles) == 1 and context.bundles[0].critical
     candidate, _ = context.bundles[0].entries[0]
-    assert candidate.view.parent_id == guidance.parent_id
+    assert candidate.entry.parent_id == guidance.parent_id

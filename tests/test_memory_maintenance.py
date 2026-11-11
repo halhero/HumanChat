@@ -3,12 +3,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from langgraph.store.memory import InMemoryStore
 
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import (
     LangGraphMemoryRepository,
     SqliteMemoryRepository,
 )
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 
 
@@ -17,7 +17,7 @@ def service(request, tmp_path):
     repository = (SqliteMemoryRepository(tmp_path / "memory.sqlite")
                   if request.param == "sqlite"
                   else LangGraphMemoryRepository(InMemoryStore()))
-    search = SqliteMemorySearch(None)
+    search = SqliteMemoryIndexStore(None)
     instance = LongTermMemoryService(repository, ("users", "default", "memory"), search)
     yield instance
     search.close()

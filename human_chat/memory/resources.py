@@ -4,16 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from human_chat.config import Settings
+from human_chat.memory.index_store import (
+    MemoryIndexReader,
+    PostgresMemoryIndexStore,
+    SqliteMemoryIndexStore,
+    create_embeddings,
+)
 from human_chat.memory.repository import (
     LangGraphMemoryRepository,
     SqliteMemoryRepository,
     default_memory_namespace,
-)
-from human_chat.memory.search import (
-    MemorySearch,
-    PostgresMemorySearch,
-    SqliteMemorySearch,
-    create_embeddings,
 )
 from human_chat.memory.service import LongTermMemoryService
 
@@ -21,7 +21,7 @@ from human_chat.memory.service import LongTermMemoryService
 @dataclass(frozen=True)
 class MemoryResource:
     service: LongTermMemoryService
-    search: MemorySearch
+    search: MemoryIndexReader
     backend: str
     persistent: bool
 
@@ -49,7 +49,7 @@ def open_memory_resource(
 
     if selected_backend == "sqlite":
         repository = SqliteMemoryRepository(settings.memory_path)
-        search = SqliteMemorySearch(
+        search = SqliteMemoryIndexStore(
             memory_sidecar_path(settings.memory_path, "search"),
             _embeddings(settings),
             configuration,
@@ -69,7 +69,7 @@ def open_memory_resource(
     if selected_backend == "memory":
         from langgraph.store.memory import InMemoryStore
 
-        search = SqliteMemorySearch(None, _embeddings(settings), configuration)
+        search = SqliteMemoryIndexStore(None, _embeddings(settings), configuration)
         try:
             yield MemoryResource(
                 LongTermMemoryService(LangGraphMemoryRepository(InMemoryStore()), namespace, search),
@@ -91,7 +91,7 @@ def open_memory_resource(
                 "PostgresStore 需要安装 langgraph-checkpoint-postgres 和 psycopg。"
             ) from exc
 
-        search = PostgresMemorySearch(
+        search = PostgresMemoryIndexStore(
             settings.memory_postgres_uri,
             namespace,
             _embeddings(settings),

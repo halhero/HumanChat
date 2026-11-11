@@ -153,7 +153,7 @@ class MemoryFormation:
             for candidate in candidates
         }
         candidate_targets = {
-            candidate_id: {entry.view.parent_id for entry in recall.candidates}
+            candidate_id: {recalled.entry.parent_id for recalled in recall.candidates}
             for candidate_id, recall in recalls.items()
         }
         target_ids = list(dict.fromkeys(

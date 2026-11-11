@@ -9,10 +9,10 @@ from human_chat.memory.formation import (
     Quote,
     Review,
 )
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import Assertion
 from human_chat.memory.repository import SqliteMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever, RecallResult
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.messages import SourceBatch, new_source
 from tests.test_memory_maintenance import operation
@@ -33,7 +33,7 @@ class ScriptedModel:
 
 
 def create_memory(tmp_path):
-    search = SqliteMemorySearch(None)
+    search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
         SqliteMemoryRepository(tmp_path / "memory.sqlite"),
         ("users", "default", "memory"),

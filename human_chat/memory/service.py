@@ -5,9 +5,9 @@ from threading import RLock
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
+from human_chat.memory.index_store import MemoryIndexWriter
 from human_chat.memory.models import MemoryItem, MemoryVersion, Mutation, MutationResult
 from human_chat.memory.repository import MemoryNamespace, MemoryRepository
-from human_chat.memory.search import MemorySearch
 
 
 class MemoryService(Protocol):
@@ -26,10 +26,10 @@ class MemoryService(Protocol):
 
 
 class LongTermMemoryService:
-    def __init__(self, repository: MemoryRepository, namespace: MemoryNamespace, search: MemorySearch):
+    def __init__(self, repository: MemoryRepository, namespace: MemoryNamespace, index_writer: MemoryIndexWriter):
         self._repository = repository
         self._namespace = namespace
-        self._search = search
+        self._index_writer = index_writer
         self._lock = RLock()
 
     @property
@@ -52,13 +52,13 @@ class LongTermMemoryService:
 
     def _persist(self, item: MemoryItem) -> None:
         self._repository.upsert_item(self._namespace, item)
-        self._search.upsert_item(item)
+        self._index_writer.upsert_item(item)
 
     def _already_applied(self, item: MemoryItem, operation_id: str) -> bool:
         if item.last_operation_id != operation_id:
             return False
         # A retry also repairs a search projection update interrupted after the canonical commit.
-        self._search.upsert_item(item)
+        self._index_writer.upsert_item(item)
         return True
 
     def _tombstone(self, item: MemoryItem, operation_id: str) -> MemoryItem:

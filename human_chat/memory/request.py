@@ -11,8 +11,8 @@ from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
 def context_references(context):
     return {"task": context.task, "diagnostics": context.diagnostics,
             "bundles": [{"id": b.id, "critical": b.critical, "required": b.required,
-                         "entries": [{"id": c.view.id, "parent_id": c.view.parent_id,
-                                      "parent_version": c.view.parent_version,
+                         "entries": [{"id": c.entry.id, "parent_id": c.entry.parent_id,
+                                      "parent_version": c.entry.parent_version,
                                       "purpose": d.purpose} for c, d in b.entries]}
                         for b in context.bundles]}
 

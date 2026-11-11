@@ -11,11 +11,11 @@ from human_chat.memory.context import (
     ContextAssessment,
     MemoryContextBuilder,
 )
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import Assertion, MemoryItem, MemoryVersion
 from human_chat.memory.repository import SqliteMemoryRepository
 from human_chat.memory.request import assemble_request, context_references
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
 from human_chat.tool_provider import ToolRegistry
@@ -25,7 +25,7 @@ from tests.test_memory_maintenance import operation, remember
 
 
 def create_memory(tmp_path):
-    search = SqliteMemorySearch(None)
+    search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
         SqliteMemoryRepository(tmp_path / "memory.sqlite"),
         ("users", "default", "memory"),

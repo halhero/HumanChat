@@ -1,5 +1,5 @@
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import MemoryItem
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from tests.test_memory_maintenance import operation, remember
 
@@ -28,7 +28,7 @@ class InMemoryRepository:
 
 def create_service():
     repository = InMemoryRepository()
-    search = SqliteMemorySearch(None)
+    search = SqliteMemoryIndexStore(None)
     return LongTermMemoryService(repository, TEST_NAMESPACE, search), repository, search
 
 

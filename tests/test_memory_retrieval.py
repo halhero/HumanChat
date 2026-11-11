@@ -1,9 +1,9 @@
+from human_chat.memory.index_store import MemoryIndexEntry
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.search import SearchDocument
 
 
 def document(name, *, identity=None):
-    return SearchDocument(
+    return MemoryIndexEntry(
         id=f"{name}@1",
         parent_id=name,
         parent_version=1,
@@ -43,7 +43,7 @@ def test_hybrid_recall_merges_bm25_vectors_and_exact_identity():
     result = MemoryRetriever(Search(), limit=2).recall(
         "query", purpose="maintenance", identity=("user", "目标", "")
     )
-    candidates = {candidate.view.parent_id: candidate for candidate in result.candidates}
+    candidates = {candidate.entry.parent_id: candidate for candidate in result.candidates}
 
     assert set(candidates) == {"shared", "lexical", "identity"}
     assert candidates["shared"].reasons == ["lexical", "semantic"]

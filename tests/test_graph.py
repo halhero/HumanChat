@@ -18,10 +18,10 @@ from human_chat.memory.context import (
     MemoryContextBuilder,
 )
 from human_chat.memory.formation import FormationPlan, MemoryFormation
+from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import LangGraphMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever
-from human_chat.memory.search import SqliteMemorySearch
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_memory_context import AssessmentModel
@@ -51,7 +51,7 @@ def lookup_context(value: str) -> str:
 
 def _build_test_graph(monkeypatch, model, registry=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
-    search = SqliteMemorySearch(None)
+    search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
         LangGraphMemoryRepository(InMemoryStore()),
         ("users", "default", "memory"),
