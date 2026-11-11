@@ -61,7 +61,7 @@ class FormationPlan(BaseModel):
 REVIEW_PROMPT = """复核每个候选的新证据支持程度，并给出自动维护提案。这是提取后的语义复核，不是独立事实证明。
 必须阅读完整new_messages、必要前文和限定词；旧记忆仅供比对，不能证明新断言。
 每个candidate_context只包含该候选独立召回的旧记录和检索诊断；不得把其他候选的记录当作当前候选的更新目标。
-逐字段复核候选。范围若漏了代码审查等限定，应在reviewed_assertion修正，不能放大为所有对话偏好。
+逐字段复核候选。范围若漏了代码审查等限定，应在reviewed_assertion修正；只有用户明确表示适用于所有未来任务时scope才可为全局。
 消息的occurred_at和evidence.message_time只是来源时间，不是事实生效时间。原话未明确事实时间就将effective_time置null。
 新的完整认识必须有value；局部维护不补造缺失内容。supported时用reviewed_assertion给出复核后的完整结构。
 朋友的话、假设、一次性要求、助手自行建议、错误否定范围不可当作用户长期认识。
@@ -79,7 +79,7 @@ target_id只选已提供记录的parent_id，fields只能来自候选supplied_fi
 
 
 EXTRACT_PROMPT = """从新用户原话提取值得长期协作使用的认识或明确维护要求，不执行写入。
-assertion字段含义：subject是明确主体，relation是关系，value是核心内容，scope是适用范围。
+assertion字段含义：subject是明确主体，relation是关系，value是核心内容，scope是适用范围；明确适用于所有未来任务的规则scope=全局，普通无范围事实scope留空。
 新的认识必须填写非空value，不能把全部内容塞进subject/relation后将value留空。
 例如“Atlas项目今年要完成登录模块”：subject=Atlas，relation=目标，value=完成登录模块，deadline=今年。
 例如“以后审查先说风险”：subject=user，relation=回答方式，value=先说风险，scope=代码审查。

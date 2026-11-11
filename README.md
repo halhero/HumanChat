@@ -299,9 +299,10 @@ Retrieval combines indexed lexical search and real semantic embeddings. Local le
 uses FTS5 BM25; production vector search uses pgvector HNSW. The two bounded result lists are
 merged with reciprocal-rank fusion before task applicability is judged. Only selected parent
 IDs are read from canonical storage, and those references are rechecked when the final model
-request is assembled. Current lightweight memory index entries also provide the task-background
-catalog so non-topical collaboration constraints are not lost; this does not read canonical
-records, but catalog size remains a separate relevance and token-budget concern.
+request is assembled. Explicit `scope=全局` rules reserve a bounded part of the candidate window;
+task and project scopes remain searchable through the current question plus bounded recent
+context. All answer-recall channels share one final candidate limit, so applicability input no
+longer grows with the total number of current memories.
 
 ```env
 HUMANCHAT_MEMORY_SEMANTIC_ENABLED="true"

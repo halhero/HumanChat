@@ -28,7 +28,7 @@ from human_chat.memory.service import LongTermMemoryService
 from human_chat.messages import new_source
 from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_memory_context import AssessmentModel
-from tests.test_memory_maintenance import remember
+from tests.test_memory_maintenance import operation
 
 
 class FakeChatModel:
@@ -60,7 +60,16 @@ def _build_test_graph(monkeypatch, model, registry=None):
         ("users", "default", "memory"),
         search,
     )
-    item = remember(service, "用户希望理解修改原因")
+    result = service.apply(operation(
+        "global-explanation-guidance",
+        assertion=Assertion(
+            subject="user:default",
+            relation="回答方式",
+            value="用户希望理解修改原因",
+            scope="全局",
+        ),
+    ))
+    item = service.get_item(result.item_id)
     selector = AssessmentModel(ContextAssessment(task="讲解", memories=[Applicability(id=f"{item.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
     return graph_module.build_graph(

@@ -23,10 +23,13 @@ def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
     guidance = MemoryIndexEntry("guidance@1", "guidance", 1, 1, "代码审查先给风险", "current", None, None)
     unrelated = MemoryIndexEntry("unrelated@1", "unrelated", 1, 1, "家用电脑是Windows", "current", None, None)
 
+    queries = []
+
     class Search:
         semantic_enabled = False
 
         def search_lexical(self, query, limit, statuses):
+            queries.append(query)
             return [guidance, unrelated]
 
         def search_semantic(self, query, limit, statuses):
@@ -35,8 +38,8 @@ def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
         def search_identity(self, identity, statuses):
             return []
 
-        def current_documents(self):
-            return [guidance, unrelated]
+        def search_global_scope(self, limit, statuses):
+            return []
 
         def has_documents(self):
             return True
@@ -47,8 +50,9 @@ def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
     ])
     context = MemoryContextBuilder(
         MemoryRetriever(Search()), AssessmentModel(result), Settings()
-    ).build("Python代码审查", [])
+    ).build("继续", [{"role": "human", "content": "Python代码审查"}])
 
+    assert "Python代码审查" in queries[0] and "继续" in queries[0]
     assert len(context.bundles) == 1 and context.bundles[0].critical
     candidate, _ = context.bundles[0].entries[0]
     assert candidate.entry.parent_id == guidance.parent_id

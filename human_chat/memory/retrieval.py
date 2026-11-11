@@ -39,6 +39,7 @@ class MemoryRetriever:
         ranked: dict[str, RecalledMemory] = {}
         diagnostics: list[str] = []
         window = self.limit * 4
+        global_ids: list[str] = []
 
         def enter(document: MemoryIndexEntry, reason: str, rank: int | None = None):
             candidate = ranked.setdefault(document.id, RecalledMemory(document))
@@ -60,11 +61,24 @@ class MemoryRetriever:
         elif self._index_reader.has_documents():
             diagnostics.append("semantic_not_configured")
 
-        hybrid = sorted(ranked.values(), key=lambda candidate: candidate.score, reverse=True)[:self.limit]
-        ranked = {candidate.entry.id: candidate for candidate in hybrid}
         if purpose == "answer":
-            for document in self._index_reader.current_documents():
-                enter(document, "task_background_catalog")
+            global_limit = max(1, self.limit // 3)
+            for document in self._index_reader.search_global_scope(
+                global_limit,
+                ("current",),
+            ):
+                enter(document, "global_scope")
+                global_ids.append(document.id)
+
+        selected = [ranked[entry_id] for entry_id in global_ids[:self.limit]]
+        selected_ids = set(global_ids)
+        topical = sorted(
+            (candidate for entry_id, candidate in ranked.items() if entry_id not in selected_ids),
+            key=lambda candidate: candidate.score,
+            reverse=True,
+        )
+        selected.extend(topical[:self.limit - len(selected)])
+        ranked = {candidate.entry.id: candidate for candidate in selected}
         if identity:
             for document in self._index_reader.search_identity(identity, statuses):
                 enter(document, "identity")

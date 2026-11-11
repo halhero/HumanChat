@@ -43,7 +43,7 @@ ASSESS_PROMPT = """为当前任务选择有用的记忆，不进行统一主题�
 结合question和recent_context识别任务/项目/阶段/对象/输出形式。
 逐条判断用途：constraint约束，guidance处理/表达指导，background项目背景，evidence问题事实，history过去事实。
 决策needed必须保留，optional可用，exclude不适用，uncertain不确定。
-来自task_background_catalog的候选不要求与问题字面或向量相似。
+来自global_scope的候选是明确适用于全部任务的规则，不要求与问题字面或向量相似。
 例如问Python代码，范围为代码审查的“先给风险结论”可能needed；问日常生活则不适用。
 不要用低主题相关性排除适用约束、目标、阶段和回答方式。也不能仅因为是偏好就无条件保留。
 当前明确要求优先于旧偏好；不同机器/项目/任务范围不混用；不把旧状态当作当前事实。
@@ -57,7 +57,11 @@ class MemoryContextBuilder:
         self.retriever, self.llm, self.settings = retriever, llm, settings
 
     def build(self, question, recent_context):
-        recall = self.retriever.recall(question)
+        recall_query = "\n".join([
+            *(str(message.get("content", "")) for message in recent_context),
+            question,
+        ])
+        recall = self.retriever.recall(recall_query)
         context = MemoryContext(diagnostics=list(recall.diagnostics))
         if not recall.candidates:
             return context

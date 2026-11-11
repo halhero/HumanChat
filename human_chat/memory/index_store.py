@@ -114,7 +114,7 @@ class MemoryIndexReader(Protocol):
     def search_identity(self, identity: tuple[str, ...], statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         ...
 
-    def current_documents(self) -> list[MemoryIndexEntry]:
+    def search_global_scope(self, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         ...
 
     def has_documents(self) -> bool:
@@ -155,6 +155,8 @@ class SqliteMemoryIndexStore:
             );
             CREATE INDEX IF NOT EXISTS search_documents_parent ON search_documents(parent_id);
             CREATE INDEX IF NOT EXISTS search_documents_identity ON search_documents(identity_key,status);
+            CREATE INDEX IF NOT EXISTS search_documents_scope
+                ON search_documents(json_extract(assertion_json,'$.scope'),status);
             CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(lexical_text);
             CREATE TABLE IF NOT EXISTS search_metadata (
                 key TEXT PRIMARY KEY,
@@ -302,10 +304,15 @@ class SqliteMemoryIndexStore:
             ).fetchall()
         return [_sqlite_document(row) for row in rows]
 
-    def current_documents(self) -> list[MemoryIndexEntry]:
+    def search_global_scope(self, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
+        placeholders = ",".join("?" for _ in statuses)
         with self._lock:
             rows = self._db.execute(
-                "SELECT * FROM search_documents WHERE status='current' ORDER BY row_id"
+                f"""SELECT * FROM search_documents
+                    WHERE json_extract(assertion_json,'$.scope')='全局'
+                      AND status IN ({placeholders})
+                    ORDER BY observed_at DESC,row_id DESC LIMIT ?""",
+                (*statuses, limit),
             ).fetchall()
         return [_sqlite_document(row) for row in rows]
 
@@ -358,6 +365,10 @@ class PostgresMemoryIndexStore:
                 ON human_chat_memory_search_documents(namespace,parent_id)""")
             cursor.execute("""CREATE INDEX IF NOT EXISTS human_chat_memory_search_identity
                 ON human_chat_memory_search_documents(namespace,identity_key,status)""")
+            cursor.execute("""CREATE INDEX IF NOT EXISTS human_chat_memory_search_scope
+                ON human_chat_memory_search_documents(
+                    namespace,(assertion_json->>'scope'),status
+                )""")
             cursor.execute("""CREATE TABLE IF NOT EXISTS human_chat_memory_search_metadata (
                 key TEXT PRIMARY KEY,value TEXT NOT NULL
             )""")
@@ -480,12 +491,15 @@ class PostgresMemoryIndexStore:
             rows = cursor.fetchall()
         return [_postgres_document(row) for row in rows]
 
-    def current_documents(self) -> list[MemoryIndexEntry]:
+    def search_global_scope(self, limit: int, statuses: tuple[str, ...]) -> list[MemoryIndexEntry]:
         with self._lock, self._db.cursor() as cursor:
             cursor.execute("""SELECT view_id,parent_id,parent_version,view_version,text,status,
                 assertion_json,observed_at,ended_at,identity_key
                 FROM human_chat_memory_search_documents
-                WHERE namespace=%s AND status='current' ORDER BY row_id""", (self.namespace,))
+                WHERE namespace=%s AND assertion_json->>'scope'='全局'
+                  AND status=ANY(%s)
+                ORDER BY observed_at DESC,row_id DESC LIMIT %s""",
+                (self.namespace, list(statuses), limit))
             rows = cursor.fetchall()
         return [_postgres_document(row) for row in rows]
 
