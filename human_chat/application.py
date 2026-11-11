@@ -18,13 +18,13 @@ from human_chat.logging_config import get_logger
 from human_chat.memory.context import MemoryContextBuilder
 from human_chat.memory.formation import MemoryFormation
 from human_chat.memory.jobs import MemoryJobs, MemoryWorker
-from human_chat.memory.request import recent_history
+from human_chat.memory.request import recent_history_before
 from human_chat.memory.resources import (
     MemoryResource,
     memory_sidecar_path,
     open_memory_resource,
 )
-from human_chat.messages import SourceBatch, history_sources, new_source
+from human_chat.messages import SourceBatch, SourceMessage, history_sources, new_source
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
 from human_chat.storage import create_session_repository
@@ -112,7 +112,7 @@ class HumanChatApplication:
         # the gap between a Graph commit and registration in the separate job database.
         for session in self._sessions.list_recent(limit=2**31 - 1):
             snapshot = self._graph.get_state(self._graph_config(session.thread_id))
-            self._enqueue_memory_sources(session, snapshot, all_completed=True)
+            self._reconcile_memory_sources(session, snapshot)
         self._memory_worker.start()
 
     def close_memory_worker(self):
@@ -121,7 +121,7 @@ class HumanChatApplication:
         if self._memory_jobs:
             self._memory_jobs.close()
 
-    def _enqueue_memory_sources(self, session, snapshot, *, all_completed=False):
+    def _reconcile_memory_sources(self, session, snapshot):
         if self._memory_jobs is None or not self._settings.memory_extraction_enabled or not snapshot.values:
             return
         messages = snapshot.values.get("messages", [])
@@ -130,22 +130,57 @@ class HumanChatApplication:
         if checkpoint_id is None:
             return
         for index, source in enumerate(sources[:-1]):
-            if not all_completed and source.id != snapshot.values.get("input_source", {}).get("id"):
-                continue
             if source.role == "user" and source.occurred_at and sources[index + 1].role == "assistant":
                 self._memory_jobs.enqueue(user_id=source.user_id, thread_id=session.thread_id,
                     checkpoint_id=checkpoint_id, source_id=source.id, source_time=source.occurred_at)
         self._memory_worker.notify()
 
+    def _enqueue_memory_source(self, session, snapshot):
+        if self._memory_jobs is None or not self._settings.memory_extraction_enabled or not snapshot.values:
+            return
+        source_data = snapshot.values.get("input_source")
+        checkpoint_id = snapshot.config["configurable"].get("checkpoint_id")
+        if not source_data or checkpoint_id is None:
+            return
+        source = SourceMessage.model_validate(source_data)
+        if source.user_id != self._settings.memory_user_id or source.session_id != session.id:
+            raise ValueError("Memory source identity does not match its session")
+        messages = snapshot.values.get("messages", [])
+        if (source.occurred_at is None or len(messages) < 2
+                or not isinstance(messages[-2], HumanMessage)
+                or messages[-2].id != source.id
+                or not isinstance(messages[-1], AIMessage)):
+            return
+        self._memory_jobs.enqueue(
+            user_id=source.user_id,
+            thread_id=session.thread_id,
+            checkpoint_id=checkpoint_id,
+            source_id=source.id,
+            source_time=source.occurred_at,
+        )
+        self._memory_worker.notify()
+
     def _load_memory_source(self, job):
         snapshot = self._graph.get_state({"configurable": {"thread_id": job["thread_id"], "checkpoint_id": job["checkpoint_id"]}})
         messages = snapshot.values.get("messages", [])
-        sources = history_sources(messages, user_id=job["user_id"], session_id=job["thread_id"])
-        position = next(i for i, source in enumerate(sources) if source.id == job["source_id"])
-        previous = recent_history([source.to_message() for source in sources[:position]], self._settings.memory_history_tokens)
-        context_ids = {message.id for message in previous}
-        return SourceBatch(user_id=job["user_id"], new_messages=[sources[position]],
-                           context_messages=[source for source in sources[:position] if source.id in context_ids])
+        source = SourceMessage.model_validate(snapshot.values.get("input_source"))
+        if source.id != job["source_id"] or source.user_id != job["user_id"]:
+            raise ValueError("Memory job source does not match its checkpoint")
+        previous = recent_history_before(
+            messages,
+            source.id,
+            self._settings.memory_history_tokens,
+        )
+        context = history_sources(
+            previous,
+            user_id=job["user_id"],
+            session_id=source.session_id,
+        )
+        return SourceBatch(
+            user_id=job["user_id"],
+            new_messages=[source],
+            context_messages=context,
+        )
 
     def status(self) -> ApplicationStatus:
         return ApplicationStatus(
@@ -321,7 +356,7 @@ class HumanChatApplication:
                     latest_state = data
                 yield mode, data
             snapshot = self._graph.get_state(self._graph_config(session.thread_id))
-            self._enqueue_memory_sources(session, snapshot)
+            self._enqueue_memory_source(session, snapshot)
         finally:
             if latest_state:
                 self._save_session_state(

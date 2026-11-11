@@ -2,6 +2,7 @@ import asyncio
 import time
 from contextlib import nullcontext
 from threading import Event
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -9,7 +10,7 @@ from langgraph.store.memory import InMemoryStore
 
 import human_chat.application as application_module
 import human_chat.graph as graph_module
-from human_chat.application import open_human_chat_application
+from human_chat.application import HumanChatApplication, open_human_chat_application
 from human_chat.config import Settings
 from human_chat.conversation import ConversationService
 from human_chat.memory.context import (
@@ -23,6 +24,7 @@ from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import LangGraphMemoryRepository
 from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.memory.service import LongTermMemoryService
+from human_chat.messages import new_source
 from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_memory_context import AssessmentModel
 from tests.test_memory_maintenance import remember
@@ -108,6 +110,40 @@ def test_tool_result_stays_in_same_model_conversation(monkeypatch):
     assert any(isinstance(message, ToolMessage) for message in model.calls[1])
     assert result["tool_call_count"] == 1
     assert result["tool_events"][0]["status"] == "success"
+
+
+def test_completed_turn_enqueues_known_source_without_converting_history(monkeypatch):
+    source = new_source("current", user_id="default", session_id="session")
+    assistant = new_source("reply", user_id="default", session_id="session", role="assistant")
+    enqueued = []
+    application = HumanChatApplication.__new__(HumanChatApplication)
+    application._settings = Settings(memory_extraction_enabled=True)
+    application._memory_jobs = SimpleNamespace(enqueue=lambda **values: enqueued.append(values))
+    application._memory_worker = SimpleNamespace(notify=lambda: None)
+    monkeypatch.setattr(
+        application_module,
+        "history_sources",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("full history converted")),
+    )
+    snapshot = SimpleNamespace(
+        values={
+            "input_source": source.model_dump(mode="json"),
+            "messages": [
+                HumanMessage(id="old-user", content="old"),
+                AIMessage(id="old-assistant", content="old reply"),
+                source.to_message(),
+                assistant.to_message(),
+            ],
+        },
+        config={"configurable": {"checkpoint_id": "checkpoint"}},
+    )
+
+    application._enqueue_memory_source(
+        SimpleNamespace(id="session", thread_id="session"),
+        snapshot,
+    )
+
+    assert enqueued[0]["source_id"] == source.id
 
 
 def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, tmp_path):

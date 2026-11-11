@@ -36,6 +36,30 @@ def recent_history(messages, budget):
     return selected
 
 
+def recent_history_before(messages, before_id, budget):
+    before = next(
+        (index for index in range(len(messages) - 1, -1, -1)
+         if messages[index].id == before_id),
+        None,
+    )
+    if before is None:
+        raise ValueError("Memory source is not present in its checkpoint history")
+
+    selected = []
+    index = before - 1
+    while index >= 0:
+        end = index + 1
+        while index > 0 and not isinstance(messages[index], HumanMessage):
+            index -= 1
+        group = messages[index:end]
+        trial = [*group, *selected]
+        if payload_tokens([message.model_dump(mode="json") for message in trial]) > budget:
+            break
+        selected = trial
+        index -= 1
+    return selected
+
+
 def _selected_memory_record(entry, item):
     prefix = f'{entry["parent_id"]}@'
     entry_id = entry["id"]

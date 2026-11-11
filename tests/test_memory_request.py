@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 import human_chat.graph as graph_module
+import human_chat.memory.request as request_module
 from human_chat.config import Settings
 from human_chat.memory.context import (
     Applicability,
@@ -14,7 +15,11 @@ from human_chat.memory.context import (
 from human_chat.memory.index_store import SqliteMemoryIndexStore
 from human_chat.memory.models import Assertion, MemoryItem, MemoryVersion
 from human_chat.memory.repository import SqliteMemoryRepository
-from human_chat.memory.request import assemble_request, context_references
+from human_chat.memory.request import (
+    assemble_request,
+    context_references,
+    recent_history_before,
+)
 from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.memory.tokens import MemoryBudgetError, payload_tokens
@@ -60,6 +65,34 @@ def reference(item, selected_id, *, parent_version=None, purpose="guidance"):
 
 def selected_records(messages):
     return json.loads(messages[0].content.rsplit("\n", 1)[-1])
+
+
+def test_recent_history_before_only_visits_token_bounded_tail(monkeypatch):
+    messages = []
+    for index in range(200):
+        messages.extend([
+            HumanMessage(id=f"user-{index}", content=f"question-{index}"),
+            AIMessage(id=f"assistant-{index}", content=f"answer-{index}"),
+        ])
+    messages.append(HumanMessage(id="current", content="current"))
+
+    class TrackingMessages(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.visited = []
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                self.visited.append(key % len(self))
+            return super().__getitem__(key)
+
+    tracked = TrackingMessages(messages)
+    monkeypatch.setattr(request_module, "payload_tokens", lambda payload: len(payload) * 10)
+
+    selected = recent_history_before(tracked, "current", 20)
+
+    assert [message.id for message in selected] == ["user-199", "assistant-199"]
+    assert min(tracked.visited) >= len(tracked) - 5
 
 
 def test_request_rereads_deletion_and_counts_whole_request(tmp_path):
