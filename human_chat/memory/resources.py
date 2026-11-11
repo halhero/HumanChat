@@ -5,7 +5,6 @@ from pathlib import Path
 
 from human_chat.config import Settings
 from human_chat.memory.index_store import (
-    MemoryIndexReader,
     PostgresMemoryIndexStore,
     SqliteMemoryIndexStore,
     create_embeddings,
@@ -15,13 +14,14 @@ from human_chat.memory.repository import (
     SqliteMemoryRepository,
     default_memory_namespace,
 )
+from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.memory.service import LongTermMemoryService
 
 
 @dataclass(frozen=True)
 class MemoryResource:
     service: LongTermMemoryService
-    search: MemoryIndexReader
+    retriever: MemoryRetriever
     backend: str
     persistent: bool
 
@@ -49,36 +49,44 @@ def open_memory_resource(
 
     if selected_backend == "sqlite":
         repository = SqliteMemoryRepository(settings.memory_path)
-        search = SqliteMemoryIndexStore(
+        index_store = SqliteMemoryIndexStore(
             memory_sidecar_path(settings.memory_path, "search"),
             _embeddings(settings),
             configuration,
         )
+        service = LongTermMemoryService(repository, namespace, index_store)
+        retriever = MemoryRetriever(index_store, settings.memory_recall_limit)
         try:
             yield MemoryResource(
-                LongTermMemoryService(repository, namespace, search),
-                search,
+                service,
+                retriever,
                 "sqlite",
                 True,
             )
         finally:
-            search.close()
+            index_store.close()
             repository.close()
         return
 
     if selected_backend == "memory":
         from langgraph.store.memory import InMemoryStore
 
-        search = SqliteMemoryIndexStore(None, _embeddings(settings), configuration)
+        index_store = SqliteMemoryIndexStore(None, _embeddings(settings), configuration)
+        service = LongTermMemoryService(
+            LangGraphMemoryRepository(InMemoryStore()),
+            namespace,
+            index_store,
+        )
+        retriever = MemoryRetriever(index_store, settings.memory_recall_limit)
         try:
             yield MemoryResource(
-                LongTermMemoryService(LangGraphMemoryRepository(InMemoryStore()), namespace, search),
-                search,
+                service,
+                retriever,
                 "memory",
                 False,
             )
         finally:
-            search.close()
+            index_store.close()
         return
 
     if selected_backend == "postgres":
@@ -91,7 +99,7 @@ def open_memory_resource(
                 "PostgresStore 需要安装 langgraph-checkpoint-postgres 和 psycopg。"
             ) from exc
 
-        search = PostgresMemoryIndexStore(
+        index_store = PostgresMemoryIndexStore(
             settings.memory_postgres_uri,
             namespace,
             _embeddings(settings),
@@ -100,14 +108,20 @@ def open_memory_resource(
         try:
             with PostgresStore.from_conn_string(settings.memory_postgres_uri) as store:
                 store.setup()
+                service = LongTermMemoryService(
+                    LangGraphMemoryRepository(store),
+                    namespace,
+                    index_store,
+                )
+                retriever = MemoryRetriever(index_store, settings.memory_recall_limit)
                 yield MemoryResource(
-                    LongTermMemoryService(LangGraphMemoryRepository(store), namespace, search),
-                    search,
+                    service,
+                    retriever,
                     "postgres",
                     True,
                 )
         finally:
-            search.close()
+            index_store.close()
         return
 
     raise ValueError(f"不支持的长期记忆后端：{selected_backend}")

@@ -24,7 +24,6 @@ from human_chat.memory.resources import (
     memory_sidecar_path,
     open_memory_resource,
 )
-from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.messages import SourceBatch, history_sources, new_source
 from human_chat.session_models import SessionRecord, now_local
 from human_chat.session_repository import SessionRepository
@@ -396,7 +395,6 @@ def open_human_chat_application(
         open_tool_registry(settings) as tool_registry,
         open_voice_resource(settings, character) as voice,
     ):
-        retriever = MemoryRetriever(memory.search, settings.memory_recall_limit)
         memory_llm = create_chat_model(settings, for_memory=True)
         graph = build_graph(
             settings,
@@ -404,7 +402,7 @@ def open_human_chat_application(
             memory_service=memory.service,
             tool_registry=tool_registry,
             character=character,
-            context_builder=MemoryContextBuilder(retriever, memory_llm, settings),
+            context_builder=MemoryContextBuilder(memory.retriever, memory_llm, settings),
         )
         application = HumanChatApplication(
             settings=settings,
@@ -417,7 +415,7 @@ def open_human_chat_application(
         )
         try:
             if settings.memory_extraction_enabled:
-                formation = MemoryFormation(memory.service, memory_llm, settings, retriever)
+                formation = MemoryFormation(memory.service, memory_llm, settings, memory.retriever)
                 application.start_memory_worker(formation)
             yield application
         finally:

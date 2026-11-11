@@ -61,4 +61,4 @@ def test_manual_memory_routes_are_not_exposed(monkeypatch, tmp_path):
         assert client.post("/api/v1/memories", json={"text": "must-not-be-written"}).status_code in (404, 405)
         assert client.delete("/api/v1/memories/unknown").status_code in (404, 405)
         memory = client.app.state.human_chat_application._memory
-        assert not memory.search.has_documents()
+        assert not memory.retriever.has_documents()

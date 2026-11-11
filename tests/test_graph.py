@@ -145,14 +145,14 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
                 assert events[-1].type == "turn.completed"
                 assert not any("memory" in event.type or event.type == "review.required" for event in events)
                 assert await asyncio.to_thread(entered.wait, 2)
-                assert not application._memory.search.has_documents()
+                assert not application._memory.retriever.has_documents()
                 assert await first.get_session_turn(session.id) is None
             finally:
                 release.set()
             deadline = time.monotonic() + 3
-            while not application._memory.search.has_documents() and time.monotonic() < deadline:
+            while not application._memory.retriever.has_documents() and time.monotonic() < deadline:
                 await asyncio.sleep(0.01)
-            assert application._memory.search.has_documents()
+            assert application._memory.retriever.has_documents()
             emitted_id = next(
                 event.data["message"]["id"]
                 for event in events if event.type == "message.completed"
@@ -162,7 +162,7 @@ def test_memory_background_does_not_hold_turn_and_survives_restart(monkeypatch, 
 
         with open_human_chat_application(settings) as application:
             recovered = ConversationService(application)
-            assert application._memory.search.has_documents()
+            assert application._memory.retriever.has_documents()
             assert application._memory_jobs.next() is None
             assert await recovered.get_session_turn(session.id) is None
             await recovered.shutdown()
@@ -196,7 +196,7 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
             assert events[-1].type == "review.required" and events[-1].data["kind"] == "tool"
             assert await service.cancel_turn(stream.turn_id) == "cancelled"
             assert application.get_pending_review(session.id) is None
-            assert not application._memory.search.has_documents()
+            assert not application._memory.retriever.has_documents()
             assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)
             assert await fresh_service.get_session_turn(session.id) is None
