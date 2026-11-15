@@ -16,5 +16,7 @@ class ChatState(BaseModel):
     # 原始 tool call，避免展示用的脱敏参数污染执行参数。
     tool_review_request: dict[str, Any] | None = None
     tool_review_approved: bool | None = None
+    resolved_request: str = ""
+    clarification_question: str = ""
     memory_context: dict[str, Any] = Field(default_factory=dict)
     assistant_text: str = ""

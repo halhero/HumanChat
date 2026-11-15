@@ -28,11 +28,17 @@ def history_groups(messages):
 
 def recent_history(messages, budget):
     selected = []
-    for group in reversed(history_groups(messages)):
+    index = len(messages) - 1
+    while index >= 0:
+        end = index + 1
+        while index > 0 and not isinstance(messages[index], HumanMessage):
+            index -= 1
+        group = messages[index:end]
         trial = [*group, *selected]
         if payload_tokens([m.model_dump(mode="json") for m in trial]) > budget:
             break
         selected = trial
+        index -= 1
     return selected
 
 

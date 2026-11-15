@@ -48,6 +48,7 @@ def test_http_tool_review_restart_preserves_tool_only_contract(monkeypatch, tmp_
         response = client.post(f"/api/v1/turns/{turn_id}/decision", json={"decision": "approve"})
         assert response.status_code == 200 and "message.completed" in response.text and "turn.completed" in response.text
         assert "memory.saved" not in response.text and calls == ["synthetic"]
+        assert len(model.understanding_calls) == 1
         assert len(client.get(f"/api/v1/sessions/{session_id}").json()["messages"]) == 2
 
 

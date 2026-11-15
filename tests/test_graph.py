@@ -1,9 +1,11 @@
 import asyncio
+import json
 import time
 from contextlib import nullcontext
 from threading import Event
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.store.memory import InMemoryStore
@@ -16,6 +18,7 @@ from human_chat.conversation import ConversationService
 from human_chat.memory.context import (
     Applicability,
     ContextAssessment,
+    MemoryContext,
     MemoryContextBuilder,
 )
 from human_chat.memory.formation import FormationPlan, MemoryFormation
@@ -32,9 +35,11 @@ from tests.test_memory_maintenance import operation
 
 
 class FakeChatModel:
-    def __init__(self, responses):
+    def __init__(self, responses, understanding_responses=None):
         self._responses = list(responses)
+        self._understanding_responses = list(understanding_responses or [])
         self.calls = []
+        self.understanding_calls = []
         self.bound_tools = []
 
     def bind_tools(self, tools):
@@ -45,6 +50,25 @@ class FakeChatModel:
         self.calls.append(list(messages))
         return self._responses.pop(0)
 
+    def with_structured_output(self, schema, *, method):
+        parent = self
+
+        class StructuredModel:
+            def invoke(self, messages):
+                parent.understanding_calls.append(list(messages))
+                if parent._understanding_responses:
+                    result = parent._understanding_responses.pop(0)
+                    if isinstance(result, Exception):
+                        raise result
+                    return result
+                payload = json.loads(messages[-1].content)
+                return {
+                    "resolved_request": payload["current_user_input"],
+                    "clarification_question": "",
+                }
+
+        return StructuredModel()
+
 
 @tool("lookup_context")
 def lookup_context(value: str) -> str:
@@ -52,7 +76,7 @@ def lookup_context(value: str) -> str:
     return f"context:{value}"
 
 
-def _build_test_graph(monkeypatch, model, registry=None):
+def _build_test_graph(monkeypatch, model, registry=None, context_builder=None):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
     search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
@@ -75,7 +99,11 @@ def _build_test_graph(monkeypatch, model, registry=None):
     return graph_module.build_graph(
         Settings(memory_extraction_enabled=False),
         memory_service=service,
-        context_builder=MemoryContextBuilder(MemoryRetriever(search), selector, Settings()),
+        context_builder=context_builder or MemoryContextBuilder(
+            MemoryRetriever(search),
+            selector,
+            Settings(),
+        ),
         tool_registry=registry or ToolRegistry([]),
     )
 
@@ -93,6 +121,93 @@ def test_direct_reply_reuses_first_model_response(monkeypatch):
     assert "用户希望理解修改原因" in model.calls[0][0].content
     assert model.calls[0][-1].id == result["messages"][0].id
     assert result["messages"][0].additional_kwargs["human_chat_source"]["occurred_at"]
+
+
+def test_resolved_request_drives_recall_and_agent_without_replacing_original(monkeypatch):
+    class CapturingContextBuilder:
+        def __init__(self):
+            self.calls = []
+
+        def build(self, question, recent_context):
+            self.calls.append((question, recent_context))
+            return MemoryContext()
+
+    context_builder = CapturingContextBuilder()
+    model = FakeChatModel(
+        [AIMessage(content="继续处理")],
+        understanding_responses=[{
+            "resolved_request": "继续整理 HumanChat 的 checkpoint 恢复流程。",
+            "clarification_question": "",
+        }],
+    )
+    app = _build_test_graph(
+        monkeypatch,
+        model,
+        context_builder=context_builder,
+    )
+
+    result = app.invoke({"question": "继续"})
+
+    assert context_builder.calls[0][0] == "继续整理 HumanChat 的 checkpoint 恢复流程。"
+    assert "继续整理 HumanChat 的 checkpoint 恢复流程" in model.calls[0][0].content
+    assert "原始用户消息为准" in model.calls[0][0].content
+    assert model.calls[0][-1].content == "继续"
+    assert result["input_source"]["content"] == "继续"
+    assert result["messages"][0].content == "继续"
+
+
+def test_clarification_is_committed_without_memory_agent_or_tools(monkeypatch):
+    class FailingContextBuilder:
+        def build(self, question, recent_context):
+            raise AssertionError("clarification path called memory context builder")
+
+    model = FakeChatModel(
+        [],
+        understanding_responses=[{
+            "resolved_request": "",
+            "clarification_question": "你希望把哪份内容发送给哪位接收者？",
+        }],
+    )
+    app = _build_test_graph(
+        monkeypatch,
+        model,
+        context_builder=FailingContextBuilder(),
+    )
+
+    result = app.invoke({"question": "把它发给他"})
+
+    assert result["assistant_text"] == "你希望把哪份内容发送给哪位接收者？"
+    assert [message.content for message in result["messages"]] == [
+        "把它发给他",
+        "你希望把哪份内容发送给哪位接收者？",
+    ]
+    assert model.calls == []
+    assert len(model.understanding_calls) == 1
+    assert result["tool_call_count"] == 0
+
+
+def test_request_understanding_failure_stops_before_context_and_agent(monkeypatch):
+    class FailingContextBuilder:
+        def build(self, question, recent_context):
+            raise AssertionError("failed understanding called memory context builder")
+
+    model = FakeChatModel(
+        [],
+        understanding_responses=[{
+            "resolved_request": "",
+            "clarification_question": "",
+        }],
+    )
+    app = _build_test_graph(
+        monkeypatch,
+        model,
+        context_builder=FailingContextBuilder(),
+    )
+
+    with pytest.raises(ValueError, match="Exactly one"):
+        app.invoke({"question": "无法理解的请求"})
+
+    assert model.calls == []
 
 
 def test_tool_result_stays_in_same_model_conversation(monkeypatch):
@@ -120,6 +235,7 @@ def test_tool_result_stays_in_same_model_conversation(monkeypatch):
     assert any(isinstance(message, ToolMessage) for message in model.calls[1])
     assert result["tool_call_count"] == 1
     assert result["tool_events"][0]["status"] == "success"
+    assert len(model.understanding_calls) == 1
 
 
 def test_completed_turn_enqueues_known_source_without_converting_history(monkeypatch):

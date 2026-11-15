@@ -18,6 +18,7 @@ from human_chat.memory.repository import SqliteMemoryRepository
 from human_chat.memory.request import (
     assemble_request,
     context_references,
+    recent_history,
     recent_history_before,
 )
 from human_chat.memory.retrieval import MemoryRetriever
@@ -93,6 +94,33 @@ def test_recent_history_before_only_visits_token_bounded_tail(monkeypatch):
 
     assert [message.id for message in selected] == ["user-199", "assistant-199"]
     assert min(tracked.visited) >= len(tracked) - 5
+
+
+def test_recent_history_only_visits_token_bounded_tail(monkeypatch):
+    messages = []
+    for index in range(200):
+        messages.extend([
+            HumanMessage(id=f"user-{index}", content=f"question-{index}"),
+            AIMessage(id=f"assistant-{index}", content=f"answer-{index}"),
+        ])
+
+    class TrackingMessages(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.visited = []
+
+        def __getitem__(self, key):
+            if isinstance(key, int):
+                self.visited.append(key % len(self))
+            return super().__getitem__(key)
+
+    tracked = TrackingMessages(messages)
+    monkeypatch.setattr(request_module, "payload_tokens", lambda payload: len(payload) * 10)
+
+    selected = recent_history(tracked, 20)
+
+    assert [message.id for message in selected] == ["user-199", "assistant-199"]
+    assert min(tracked.visited) >= len(tracked) - 4
 
 
 def test_request_rereads_deletion_and_counts_whole_request(tmp_path):

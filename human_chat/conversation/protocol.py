@@ -30,7 +30,7 @@ def progress_event(
     announced_stages: set[str],
 ) -> ConversationEvent | None:
     stages = {
-        "prepare_context": ("thinking", "正在理解你的问题"),
+        "understand_request": ("thinking", "正在理解你的问题"),
         "execute_project_tools": ("working", "正在获取回答所需的信息"),
         "generate_limit_reply": ("writing", "正在整理已有信息"),
         "finalize_reply": ("writing", "正在生成回复"),

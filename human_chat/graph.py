@@ -1,3 +1,4 @@
+import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
@@ -12,6 +13,7 @@ from human_chat.llm import create_chat_model
 from human_chat.memory.service import MemoryService
 from human_chat.memory.request import assemble_request, context_references, recent_history
 from human_chat.messages import SourceMessage, new_source
+from human_chat.request_understanding import invoke_request_understanding
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
 from human_chat.tool_review import (
@@ -41,11 +43,24 @@ TOOL_LIMIT_PROMPT = """
 MAX_TOOL_CALL_ROUNDS = 3
 
 
-def _build_system_prompt(character) -> str:
-    return (
+def _build_system_prompt(character, resolved_request: str) -> str:
+    base = (
         f"{character.system_prompt}\n"
         f"请使用角色配置指定的语言回复：{character.reply_language}。\n"
         f"{TOOL_CALLING_PROMPT}"
+    )
+    if not resolved_request:
+        return base
+    derived = json.dumps(
+        {"resolved_request": resolved_request},
+        ensure_ascii=False,
+    )
+    return (
+        base
+        + "\n以下 JSON 是根据本回合原始用户消息和近期对话得到的派生语义视图，"
+        "用于消解指代和省略，不是第二条用户指令。若它与原始用户消息冲突，"
+        "必须以原始用户消息为准：\n"
+        + derived
     )
 
 
@@ -132,7 +147,7 @@ def build_graph(
     tool_llm = llm.bind_tools(project_tools)
     tool_node = ToolNode(project_tools, messages_key="tool_messages")
 
-    def prepare_context(state: ChatState, config: RunnableConfig):
+    def initialize_turn(state: ChatState, config: RunnableConfig):
         source = SourceMessage.model_validate(state.input_source) if state.input_source else None
         if source is None or source.content != state.question or any(m.id == source.id for m in state.messages):
             source = new_source(state.question, user_id=settings.memory_user_id,
@@ -141,12 +156,11 @@ def build_graph(
             raise ValueError("Input source does not match the configured user")
         # 这些字段属于“当前一轮提问”的临时执行状态。每次新提问都清空审批结果，
         # 防止上一轮对某个工具的批准被错误复用于下一轮调用。
-        recent = recent_history(state.messages, settings.memory_history_tokens)
-        memory_context = context_references(context_builder.build(state.question, [
-            {"role": m.type, "content": m.content} for m in recent]))
         return {
             "input_source": source.model_dump(mode="json"),
-            "memory_context": memory_context,
+            "resolved_request": "",
+            "clarification_question": "",
+            "memory_context": {},
             "tool_messages": [],
             "tool_call_count": 0,
             "tool_events": [],
@@ -154,6 +168,41 @@ def build_graph(
             "tool_review_request": None,
             "tool_review_approved": None,
             "assistant_text": "",
+        }
+
+    def bounded_recent_context(state: ChatState) -> list[dict[str, str]]:
+        recent = recent_history(state.messages, settings.memory_history_tokens)
+        return [
+            {"role": message.type, "content": _message_text(message)}
+            for message in recent
+        ]
+
+    def understand_request(state: ChatState):
+        result = invoke_request_understanding(
+            llm,
+            state.question,
+            bounded_recent_context(state),
+        )
+        return {
+            "resolved_request": result.resolved_request,
+            "clarification_question": result.clarification_question,
+        }
+
+    def build_memory_context(state: ChatState):
+        memory_context = context_references(
+            context_builder.build(
+                state.resolved_request,
+                bounded_recent_context(state),
+            )
+        )
+        return {"memory_context": memory_context}
+
+    def reply_clarification(state: ChatState):
+        return {
+            "tool_messages": [
+                SourceMessage.model_validate(state.input_source).to_message(),
+                AIMessage(content=state.clarification_question),
+            ],
         }
 
     def call_agent_model(state: ChatState):
@@ -240,7 +289,7 @@ def build_graph(
         }
 
     def build_request(state, current, tools):
-        conversation, diagnostics = assemble_request(_build_system_prompt(active_character), state.messages,
+        conversation, diagnostics = assemble_request(_build_system_prompt(active_character, state.resolved_request), state.messages,
             current, state.memory_context, memory_service, tools, settings)
         if diagnostics:
             logger.info("Memory context diagnostics: %s", diagnostics)
@@ -308,6 +357,11 @@ def build_graph(
             return "execute_project_tools"
         return "finalize_reply"
 
+    def route_after_request_understanding(state: ChatState):
+        if state.clarification_question:
+            return "reply_clarification"
+        return "build_memory_context"
+
     def route_after_tool_review(state: ChatState):
         # 审批只有两个出口：批准才进入真实 ToolNode；其他值包括缺失值都拒绝。
         if state.tool_review_approved:
@@ -315,7 +369,10 @@ def build_graph(
         return "reject_tool_calls"
 
     workflow = StateGraph(ChatState)
-    workflow.add_node("prepare_context", prepare_context)
+    workflow.add_node("initialize_turn", initialize_turn)
+    workflow.add_node("understand_request", understand_request)
+    workflow.add_node("build_memory_context", build_memory_context)
+    workflow.add_node("reply_clarification", reply_clarification)
     workflow.add_node("call_agent_model", call_agent_model)
     workflow.add_node("execute_project_tools", execute_project_tools)
     workflow.add_node("review_tool_calls", review_tool_calls)
@@ -324,8 +381,18 @@ def build_graph(
     workflow.add_node("finalize_reply", finalize_reply)
     workflow.add_node("finish_turn", finish_turn)
     workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
-    workflow.add_edge(START, "prepare_context")
-    workflow.add_edge("prepare_context", "call_agent_model")
+    workflow.add_edge(START, "initialize_turn")
+    workflow.add_edge("initialize_turn", "understand_request")
+    workflow.add_conditional_edges(
+        "understand_request",
+        route_after_request_understanding,
+        {
+            "build_memory_context": "build_memory_context",
+            "reply_clarification": "reply_clarification",
+        },
+    )
+    workflow.add_edge("build_memory_context", "call_agent_model")
+    workflow.add_edge("reply_clarification", "finalize_reply")
     workflow.add_conditional_edges(
         "call_agent_model",
         route_after_agent_model,
