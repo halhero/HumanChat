@@ -1,3 +1,5 @@
+import json
+
 from human_chat.config import Settings
 from human_chat.memory.context import (
     Applicability,
@@ -11,11 +13,13 @@ from human_chat.memory.retrieval import MemoryRetriever
 class AssessmentModel:
     def __init__(self, result):
         self.result = result
+        self.calls = []
 
     def with_structured_output(self, schema, **kwargs):
         return self
 
     def invoke(self, messages):
+        self.calls.append(messages)
         return self.result
 
 
@@ -48,11 +52,17 @@ def test_applicability_keeps_needed_guidance_and_excludes_unrelated_candidate():
         Applicability(id=guidance.id, purpose="guidance", decision="needed", reason="任务范围适用"),
         Applicability(id=unrelated.id, purpose="background", decision="exclude", reason="不同任务"),
     ])
+    model = AssessmentModel(result)
+    question = "继续审查 Python 代码并先给出风险结论"
+    recent_context = [{"role": "human", "content": "此前还讨论过 MCP 工具接入"}]
     context = MemoryContextBuilder(
-        MemoryRetriever(Search()), AssessmentModel(result), Settings()
-    ).build("继续", [{"role": "human", "content": "Python代码审查"}])
+        MemoryRetriever(Search()), model, Settings()
+    ).build(question, recent_context)
 
-    assert "Python代码审查" in queries[0] and "继续" in queries[0]
+    assert queries == [question]
+    payload = json.loads(model.calls[0][-1].content)
+    assert payload["question"] == question
+    assert payload["recent_context"] == recent_context
     assert len(context.bundles) == 1 and context.bundles[0].critical
     candidate, _ = context.bundles[0].entries[0]
     assert candidate.entry.parent_id == guidance.parent_id

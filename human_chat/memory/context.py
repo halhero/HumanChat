@@ -57,11 +57,7 @@ class MemoryContextBuilder:
         self.retriever, self.llm, self.settings = retriever, llm, settings
 
     def build(self, question, recent_context):
-        recall_query = "\n".join([
-            *(str(message.get("content", "")) for message in recent_context),
-            question,
-        ])
-        recall = self.retriever.recall(recall_query)
+        recall = self.retriever.recall(question)
         context = MemoryContext(diagnostics=list(recall.diagnostics))
         if not recall.candidates:
             return context
