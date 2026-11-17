@@ -255,7 +255,13 @@ def test_selected_memory_reaches_real_graph_model_input(monkeypatch, tmp_path):
     model = FakeChatModel([AIMessage(content="风险结论")])
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
     settings = Settings(memory_extraction_enabled=False)
-    graph = graph_module.build_graph(settings, memory_service=service, tool_registry=ToolRegistry([]),
-        context_builder=MemoryContextBuilder(MemoryRetriever(search), selector, settings))
+    retriever = MemoryRetriever(search)
+    graph = graph_module.build_graph(
+        settings,
+        memory_service=service,
+        memory_retriever=retriever,
+        tool_registry=ToolRegistry([]),
+        context_builder=MemoryContextBuilder(retriever, selector, settings),
+    )
     assert graph.invoke({"question": "代码审查Python"})["assistant_text"] == "风险结论"
     assert item.text in model.calls[0][0].content

@@ -10,8 +10,9 @@ from human_chat.character import Character, load_character
 from human_chat.config import Settings, load_settings
 from human_chat.logging_config import get_logger
 from human_chat.llm import create_chat_model
-from human_chat.memory.service import MemoryService
+from human_chat.memory.retrieval import MemoryRetriever
 from human_chat.memory.request import assemble_request, context_references, recent_history
+from human_chat.memory.service import MemoryService
 from human_chat.messages import SourceMessage, new_source
 from human_chat.request_understanding import invoke_request_understanding
 from human_chat.schemas import ChatState
@@ -132,6 +133,7 @@ def build_graph(
     settings: Settings | None = None,
     *,
     memory_service: MemoryService,
+    memory_retriever: MemoryRetriever,
     context_builder,
     checkpointer=None,
     tool_registry: ToolRegistry | None = None,
@@ -180,6 +182,7 @@ def build_graph(
     def understand_request(state: ChatState):
         result = invoke_request_understanding(
             llm,
+            memory_retriever,
             state.question,
             _build_recent_context_payload(state),
         )

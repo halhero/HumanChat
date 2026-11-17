@@ -22,13 +22,14 @@ from human_chat.memory.context import (
     MemoryContextBuilder,
 )
 from human_chat.memory.formation import FormationPlan, MemoryFormation
-from human_chat.memory.index_store import SqliteMemoryIndexStore
+from human_chat.memory.index_store import MemoryIndexEntry, SqliteMemoryIndexStore
 from human_chat.memory.jobs import MemoryJobs
 from human_chat.memory.models import Assertion, Evidence, Mutation
 from human_chat.memory.repository import LangGraphMemoryRepository
-from human_chat.memory.retrieval import MemoryRetriever
+from human_chat.memory.retrieval import MemoryRetriever, RecallResult, RecalledMemory
 from human_chat.memory.service import LongTermMemoryService
 from human_chat.messages import new_source
+from human_chat.request_understanding import TriageDecision
 from human_chat.tool_provider import RegisteredTool, ToolPolicy, ToolRegistry
 from tests.test_memory_context import AssessmentModel
 from tests.test_memory_maintenance import operation
@@ -62,10 +63,12 @@ class FakeChatModel:
                         raise result
                     return result
                 payload = json.loads(messages[-1].content)
-                return {
-                    "resolved_request": payload["current_user_input"],
-                    "clarification_question": "",
-                }
+                if schema is TriageDecision:
+                    return {
+                        "outcome": "resolved",
+                        "resolved_request": payload["current_user_input"],
+                    }
+                raise AssertionError("unexpected structured model call")
 
         return StructuredModel()
 
@@ -76,7 +79,13 @@ def lookup_context(value: str) -> str:
     return f"context:{value}"
 
 
-def _build_test_graph(monkeypatch, model, registry=None, context_builder=None):
+def _build_test_graph(
+    monkeypatch,
+    model,
+    registry=None,
+    context_builder=None,
+    memory_retriever=None,
+):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
     search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
@@ -96,11 +105,13 @@ def _build_test_graph(monkeypatch, model, registry=None, context_builder=None):
     item = service.get_item(result.item_id)
     selector = AssessmentModel(ContextAssessment(task="讲解", memories=[Applicability(id=f"{item.id}@1",
         purpose="guidance", decision="needed", reason="适用")]))
+    retriever = memory_retriever or MemoryRetriever(search)
     return graph_module.build_graph(
         Settings(memory_extraction_enabled=False),
         memory_service=service,
+        memory_retriever=retriever,
         context_builder=context_builder or MemoryContextBuilder(
-            MemoryRetriever(search),
+            retriever,
             selector,
             Settings(),
         ),
@@ -137,8 +148,8 @@ def test_resolved_request_drives_recall_and_agent_without_replacing_original(mon
     model = FakeChatModel(
         [AIMessage(content="继续处理")],
         understanding_responses=[{
+            "outcome": "resolved",
             "resolved_request": "继续整理 HumanChat 的 checkpoint 恢复流程。",
-            "clarification_question": "",
         }],
     )
     app = _build_test_graph(
@@ -157,6 +168,69 @@ def test_resolved_request_drives_recall_and_agent_without_replacing_original(mon
     assert result["messages"][0].content == "继续"
 
 
+def test_memory_assisted_understanding_keeps_triage_data_local(monkeypatch):
+    class CapturingContextBuilder:
+        def __init__(self):
+            self.calls = []
+
+        def build(self, question, recent_context):
+            self.calls.append((question, recent_context))
+            return MemoryContext()
+
+    entry = MemoryIndexEntry(
+        id="project@2",
+        parent_id="project",
+        parent_version=2,
+        version=2,
+        text="HumanChat 当前正在完善请求理解流程。",
+        status="current",
+        assertion=None,
+        observed_at=None,
+    )
+
+    class Retriever:
+        def __init__(self):
+            self.calls = []
+
+        def recall(self, query, **kwargs):
+            self.calls.append((query, kwargs))
+            return RecallResult([RecalledMemory(entry)], [])
+
+    retriever = Retriever()
+    context_builder = CapturingContextBuilder()
+    model = FakeChatModel(
+        [AIMessage(content="继续处理")],
+        understanding_responses=[
+            {
+                "outcome": "search_memory",
+                "memory_query": "HumanChat 项目当前阶段",
+            },
+            {
+                "resolved_request": "继续完善 HumanChat 的请求理解流程。",
+                "clarification_question": "",
+            },
+        ],
+    )
+    app = _build_test_graph(
+        monkeypatch,
+        model,
+        context_builder=context_builder,
+        memory_retriever=retriever,
+    )
+
+    result = app.invoke({"question": "继续上次的 HumanChat 项目"})
+
+    assert retriever.calls == [(
+        "HumanChat 项目当前阶段",
+        {"purpose": "triage", "limit": 5},
+    )]
+    assert context_builder.calls[0][0] == "继续完善 HumanChat 的请求理解流程。"
+    assert len(model.understanding_calls) == 2
+    assert "memory_query" not in result
+    assert "memory_candidates" not in result
+    assert result["messages"][0].content == "继续上次的 HumanChat 项目"
+
+
 def test_clarification_is_committed_without_memory_agent_or_tools(monkeypatch):
     class FailingContextBuilder:
         def build(self, question, recent_context):
@@ -165,7 +239,7 @@ def test_clarification_is_committed_without_memory_agent_or_tools(monkeypatch):
     model = FakeChatModel(
         [],
         understanding_responses=[{
-            "resolved_request": "",
+            "outcome": "clarify",
             "clarification_question": "你希望把哪份内容发送给哪位接收者？",
         }],
     )
@@ -196,8 +270,8 @@ def test_request_understanding_failure_stops_before_context_and_agent(monkeypatc
     model = FakeChatModel(
         [],
         understanding_responses=[{
+            "outcome": "resolved",
             "resolved_request": "",
-            "clarification_question": "",
         }],
     )
     app = _build_test_graph(
@@ -206,7 +280,7 @@ def test_request_understanding_failure_stops_before_context_and_agent(monkeypatc
         context_builder=FailingContextBuilder(),
     )
 
-    with pytest.raises(ValueError, match="Exactly one"):
+    with pytest.raises(ValueError, match="resolved_request must not be empty"):
         app.invoke({"question": "无法理解的请求"})
 
     assert model.calls == []

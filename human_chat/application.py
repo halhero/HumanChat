@@ -457,6 +457,7 @@ def open_human_chat_application(
             settings,
             checkpointer=checkpoint.saver,
             memory_service=memory.service,
+            memory_retriever=memory.retriever,
             tool_registry=tool_registry,
             character=character,
             context_builder=MemoryContextBuilder(memory.retriever, memory_llm, settings),
