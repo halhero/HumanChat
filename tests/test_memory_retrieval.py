@@ -78,3 +78,41 @@ def test_answer_recall_reserves_global_scope_and_keeps_final_candidates_bounded(
     assert len(result.candidates) == 6
     assert result.candidates[0].entry.id == global_rule.id
     assert result.candidates[0].reasons == ["global_scope"]
+
+
+def test_triage_recall_uses_active_history_without_global_or_identity():
+    lexical = [document(f"lexical-{index}") for index in range(8)]
+    semantic = [document(f"semantic-{index}") for index in range(8)]
+    calls = []
+
+    class Search:
+        semantic_enabled = True
+
+        def search_lexical(self, query, limit, statuses):
+            calls.append(("lexical", limit, statuses))
+            return lexical
+
+        def search_semantic(self, query, limit, statuses):
+            calls.append(("semantic", limit, statuses))
+            return semantic
+
+        def search_identity(self, identity, statuses):
+            raise AssertionError("triage recall used identity search")
+
+        def search_global_scope(self, limit, statuses):
+            raise AssertionError("triage recall loaded global scope")
+
+        def has_documents(self):
+            return True
+
+    result = MemoryRetriever(Search(), limit=24).recall(
+        "HumanChat 项目进度",
+        purpose="triage",
+        limit=5,
+    )
+
+    assert calls == [
+        ("lexical", 20, ("current", "historical")),
+        ("semantic", 20, ("current", "historical")),
+    ]
+    assert len(result.candidates) == 5

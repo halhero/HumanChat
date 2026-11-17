@@ -1,11 +1,15 @@
 """Hybrid recall over the lightweight search projection."""
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from human_chat.logging_config import get_logger
 from human_chat.memory.index_store import MemoryIndexEntry, MemoryIndexReader
 
 logger = get_logger(__name__)
+
+
+RecallPurpose = Literal["answer", "triage", "maintenance"]
 
 
 @dataclass
@@ -32,13 +36,25 @@ class MemoryRetriever:
     def has_documents(self) -> bool:
         return self._index_reader.has_documents()
 
-    def recall(self, query: str, *, purpose: str = "answer", identity=None) -> RecallResult:
-        statuses = ("current", "historical") if purpose == "answer" else (
-            "current", "historical", "revoked", "expired"
-        )
+    def recall(
+        self,
+        query: str,
+        *,
+        purpose: RecallPurpose = "answer",
+        identity=None,
+        limit: int | None = None,
+    ) -> RecallResult:
+        if purpose in ("answer", "triage"):
+            statuses = ("current", "historical")
+        elif purpose == "maintenance":
+            statuses = ("current", "historical", "revoked", "expired")
+        else:
+            raise ValueError(f"Unsupported memory recall purpose: {purpose}")
+
+        effective_limit = limit if limit is not None else self.limit
         ranked: dict[str, RecalledMemory] = {}
         diagnostics: list[str] = []
-        window = self.limit * 4
+        window = effective_limit * 4
         global_ids: list[str] = []
 
         def enter(document: MemoryIndexEntry, reason: str, rank: int | None = None):
@@ -62,7 +78,7 @@ class MemoryRetriever:
             diagnostics.append("semantic_not_configured")
 
         if purpose == "answer":
-            global_limit = max(1, self.limit // 3)
+            global_limit = max(1, effective_limit // 3)
             for document in self._index_reader.search_global_scope(
                 global_limit,
                 ("current",),
@@ -70,16 +86,16 @@ class MemoryRetriever:
                 enter(document, "global_scope")
                 global_ids.append(document.id)
 
-        selected = [ranked[entry_id] for entry_id in global_ids[:self.limit]]
+        selected = [ranked[entry_id] for entry_id in global_ids[:effective_limit]]
         selected_ids = set(global_ids)
         topical = sorted(
             (candidate for entry_id, candidate in ranked.items() if entry_id not in selected_ids),
             key=lambda candidate: candidate.score,
             reverse=True,
         )
-        selected.extend(topical[:self.limit - len(selected)])
+        selected.extend(topical[:effective_limit - len(selected)])
         ranked = {candidate.entry.id: candidate for candidate in selected}
-        if identity:
+        if purpose == "maintenance" and identity:
             for document in self._index_reader.search_identity(identity, statuses):
                 enter(document, "identity")
         return RecallResult(list(ranked.values()), diagnostics)
