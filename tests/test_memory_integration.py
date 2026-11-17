@@ -49,7 +49,11 @@ def test_http_tool_review_restart_preserves_tool_only_contract(monkeypatch, tmp_
         assert response.status_code == 200 and "message.completed" in response.text and "turn.completed" in response.text
         assert "memory.saved" not in response.text and calls == ["synthetic"]
         assert len(model.understanding_calls) == 1
-        assert len(client.get(f"/api/v1/sessions/{session_id}").json()["messages"]) == 2
+        messages = client.get(f"/api/v1/sessions/{session_id}").json()["messages"]
+        assert [(message["role"], message["content"]) for message in messages] == [
+            ("user", "执行验证操作"),
+            ("assistant", "已完成"),
+        ]
 
 
 def test_manual_memory_routes_are_not_exposed(monkeypatch, tmp_path):

@@ -1,6 +1,6 @@
 import json
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -170,7 +170,7 @@ def build_graph(
             "assistant_text": "",
         }
 
-    def bounded_recent_context(state: ChatState) -> list[dict[str, str]]:
+    def _build_recent_context_payload(state: ChatState) -> list[dict[str, str]]:
         recent = recent_history(state.messages, settings.memory_history_tokens)
         return [
             {"role": message.type, "content": _message_text(message)}
@@ -181,7 +181,7 @@ def build_graph(
         result = invoke_request_understanding(
             llm,
             state.question,
-            bounded_recent_context(state),
+            _build_recent_context_payload(state),
         )
         return {
             "resolved_request": result.resolved_request,
@@ -192,18 +192,13 @@ def build_graph(
         memory_context = context_references(
             context_builder.build(
                 state.resolved_request,
-                bounded_recent_context(state),
+                _build_recent_context_payload(state),
             )
         )
         return {"memory_context": memory_context}
 
     def reply_clarification(state: ChatState):
-        return {
-            "tool_messages": [
-                SourceMessage.model_validate(state.input_source).to_message(),
-                AIMessage(content=state.clarification_question),
-            ],
-        }
+        return {"assistant_text": state.clarification_question}
 
     def call_agent_model(state: ChatState):
         tool_messages = state.tool_messages or [
@@ -212,7 +207,9 @@ def build_graph(
         conversation = build_request(state, tool_messages, project_tools)
 
         response = tool_llm.invoke(conversation)
-        return {"tool_messages": [*tool_messages, response]}
+        if getattr(response, "tool_calls", None):
+            return {"tool_messages": [*tool_messages, response]}
+        return {"assistant_text": _message_text(response)}
 
     def execute_project_tools(state: ChatState):
         # ToolNode 使用模型产生的原始 tool call，因此审批界面中的参数脱敏副本不会
@@ -301,14 +298,13 @@ def build_graph(
             tool_call_id=call["id"], name=call["name"], status="error") for call in pending]]
         conversation = build_request(state, [*completed, SystemMessage(content=TOOL_LIMIT_PROMPT)], [])
         response = llm.invoke(conversation)
-        return {"tool_messages": [*completed, response]}
+        return {
+            "tool_messages": completed,
+            "assistant_text": _message_text(response),
+        }
 
     def finalize_reply(state: ChatState):
-        if not state.tool_messages:
-            raise RuntimeError("模型调用结束，但没有返回任何消息。")
-
-        response = state.tool_messages[-1]
-        assistant_text = _message_text(response)
+        assistant_text = state.assistant_text.strip()
         if not assistant_text:
             raise RuntimeError("模型没有返回可显示的文本回答。")
 
@@ -341,6 +337,8 @@ def build_graph(
         }
 
     def route_after_agent_model(state: ChatState):
+        if state.assistant_text:
+            return "finalize_reply"
         if not state.tool_messages:
             return "finalize_reply"
         last_message = state.tool_messages[-1]

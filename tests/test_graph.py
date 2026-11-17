@@ -115,6 +115,7 @@ def test_direct_reply_reuses_first_model_response(monkeypatch):
     result = app.invoke({"question": "你好"})
 
     assert result["assistant_text"] == "直接回答"
+    assert result["tool_messages"] == []
     assert len(model.calls) == 1
     assert isinstance(model.calls[0][0], SystemMessage)
     assert isinstance(model.calls[0][-1], HumanMessage)
@@ -177,6 +178,7 @@ def test_clarification_is_committed_without_memory_agent_or_tools(monkeypatch):
     result = app.invoke({"question": "把它发给他"})
 
     assert result["assistant_text"] == "你希望把哪份内容发送给哪位接收者？"
+    assert result["tool_messages"] == []
     assert [message.content for message in result["messages"]] == [
         "把它发给他",
         "你希望把哪份内容发送给哪位接收者？",
@@ -233,9 +235,45 @@ def test_tool_result_stays_in_same_model_conversation(monkeypatch):
     assert result["assistant_text"] == "基于工具结果回答"
     assert len(model.calls) == 2
     assert any(isinstance(message, ToolMessage) for message in model.calls[1])
+    assert isinstance(result["tool_messages"][-1], ToolMessage)
+    assert not any(
+        isinstance(message, AIMessage) and message.content == "基于工具结果回答"
+        for message in result["tool_messages"]
+    )
     assert result["tool_call_count"] == 1
     assert result["tool_events"][0]["status"] == "success"
     assert len(model.understanding_calls) == 1
+
+
+def test_tool_limit_reply_uses_final_reply_state(monkeypatch):
+    requests = [
+        AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "lookup_context",
+                "args": {"value": f"round-{index}"},
+                "id": f"call-{index}",
+                "type": "tool_call",
+            }],
+        )
+        for index in range(4)
+    ]
+    model = FakeChatModel([*requests, AIMessage(content="工具调用达到上限后的回答")])
+    registry = ToolRegistry(
+        [RegisteredTool(tool=lookup_context, source="test")]
+    )
+    app = _build_test_graph(monkeypatch, model, registry)
+
+    result = app.invoke({"question": "连续查询项目"})
+
+    assert result["assistant_text"] == "工具调用达到上限后的回答"
+    assert result["tool_call_count"] == graph_module.MAX_TOOL_CALL_ROUNDS
+    assert isinstance(result["tool_messages"][-1], ToolMessage)
+    assert result["tool_messages"][-1].content.startswith("[tool_limit]")
+    assert not any(
+        isinstance(message, AIMessage) and message.content == "工具调用达到上限后的回答"
+        for message in result["tool_messages"]
+    )
 
 
 def test_completed_turn_enqueues_known_source_without_converting_history(monkeypatch):
