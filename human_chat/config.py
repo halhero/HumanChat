@@ -36,6 +36,12 @@ class Settings(BaseModel):
     llm_timeout_seconds: float = Field(default=60, ge=1, le=600)
     chat_context_tokens: int = Field(default=32000, ge=4000, le=1000000)
     chat_output_tokens: int = Field(default=2048, ge=256, le=32000)
+    react_tool_call_limit: int = Field(default=3, ge=1, le=20)
+    plan_initial_max_steps: int = Field(default=6, ge=1, le=20)
+    plan_initial_execution_limit: int = Field(default=4, ge=1, le=20)
+    plan_execution_limit_increment: int = Field(default=3, ge=1, le=10)
+    plan_hard_execution_limit: int = Field(default=12, ge=1, le=50)
+    plan_step_tool_call_limit: int = Field(default=4, ge=1, le=20)
     stt_provider: Literal["dashscope", "openai"] = "dashscope"
     stt_model: str = "qwen3-asr-flash"
     stt_base_url: str = ""
@@ -97,6 +103,10 @@ class Settings(BaseModel):
     def validate_chat_window(self):
         if self.chat_output_tokens >= self.chat_context_tokens:
             raise ValueError("Chat output reserve must be smaller than the total context window")
+        if self.plan_initial_max_steps > self.plan_hard_execution_limit:
+            raise ValueError("Initial plan size must not exceed the hard execution limit")
+        if self.plan_initial_execution_limit > self.plan_hard_execution_limit:
+            raise ValueError("Initial plan execution limit must not exceed the hard limit")
         return self
 
 
@@ -107,6 +117,20 @@ _ENV_OVERRIDES = (
     ("llm_timeout_seconds", "HUMANCHAT_LLM_TIMEOUT_SECONDS", float),
     ("chat_context_tokens", "HUMANCHAT_CHAT_CONTEXT_TOKENS", int),
     ("chat_output_tokens", "HUMANCHAT_CHAT_OUTPUT_TOKENS", int),
+    ("react_tool_call_limit", "HUMANCHAT_REACT_TOOL_CALL_LIMIT", int),
+    ("plan_initial_max_steps", "HUMANCHAT_PLAN_INITIAL_MAX_STEPS", int),
+    (
+        "plan_initial_execution_limit",
+        "HUMANCHAT_PLAN_INITIAL_EXECUTION_LIMIT",
+        int,
+    ),
+    (
+        "plan_execution_limit_increment",
+        "HUMANCHAT_PLAN_EXECUTION_LIMIT_INCREMENT",
+        int,
+    ),
+    ("plan_hard_execution_limit", "HUMANCHAT_PLAN_HARD_EXECUTION_LIMIT", int),
+    ("plan_step_tool_call_limit", "HUMANCHAT_PLAN_STEP_TOOL_CALL_LIMIT", int),
     ("stt_provider", "HUMANCHAT_STT_PROVIDER", str),
     ("stt_model", "HUMANCHAT_STT_MODEL", str),
     ("stt_base_url", "HUMANCHAT_STT_BASE_URL", str),

@@ -162,6 +162,7 @@ def build_graph(
             "input_source": source.model_dump(mode="json"),
             "resolved_request": "",
             "clarification_question": "",
+            "execution_mode": "react",
             "memory_context": {},
             "tool_messages": [],
             "tool_call_count": 0,
@@ -189,6 +190,7 @@ def build_graph(
         return {
             "resolved_request": result.resolved_request,
             "clarification_question": result.clarification_question,
+            "execution_mode": result.execution_mode,
         }
 
     def build_memory_context(state: ChatState):

@@ -67,6 +67,7 @@ class FakeChatModel:
                     return {
                         "outcome": "resolved",
                         "resolved_request": payload["current_user_input"],
+                        "execution_mode": "react",
                     }
                 raise AssertionError("unexpected structured model call")
 
@@ -150,6 +151,7 @@ def test_resolved_request_drives_recall_and_agent_without_replacing_original(mon
         understanding_responses=[{
             "outcome": "resolved",
             "resolved_request": "继续整理 HumanChat 的 checkpoint 恢复流程。",
+            "execution_mode": "react",
         }],
     )
     app = _build_test_graph(
@@ -206,8 +208,9 @@ def test_memory_assisted_understanding_keeps_triage_data_local(monkeypatch):
                 "memory_query": "HumanChat 项目当前阶段",
             },
             {
+                "outcome": "resolved",
                 "resolved_request": "继续完善 HumanChat 的请求理解流程。",
-                "clarification_question": "",
+                "execution_mode": "react",
             },
         ],
     )
@@ -272,6 +275,7 @@ def test_request_understanding_failure_stops_before_context_and_agent(monkeypatc
         understanding_responses=[{
             "outcome": "resolved",
             "resolved_request": "",
+            "execution_mode": "react",
         }],
     )
     app = _build_test_graph(

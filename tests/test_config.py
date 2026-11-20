@@ -34,3 +34,15 @@ def test_stt_provider_defaults_and_upload_limit():
     assert config.Settings(stt_provider="openai").stt_upload_limit_bytes == 25 * 1024 * 1024
     with pytest.raises(ValueError):
         config.Settings(stt_provider="unknown")
+
+
+def test_plan_limits_have_one_valid_ordering_boundary():
+    settings = config.Settings()
+
+    assert settings.plan_initial_max_steps <= settings.plan_hard_execution_limit
+    assert settings.plan_initial_execution_limit <= settings.plan_hard_execution_limit
+    with pytest.raises(ValueError):
+        config.Settings(
+            plan_initial_execution_limit=5,
+            plan_hard_execution_limit=4,
+        )

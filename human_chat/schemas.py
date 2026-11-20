@@ -3,6 +3,8 @@ from typing import Annotated, Any
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
 
+from human_chat.execution import ExecutionMode
+
 
 class ChatState(BaseModel):
     question: str = Field(description="User question.")
@@ -18,5 +20,6 @@ class ChatState(BaseModel):
     tool_review_approved: bool | None = None
     resolved_request: str = ""
     clarification_question: str = ""
+    execution_mode: ExecutionMode = "react"
     memory_context: dict[str, Any] = Field(default_factory=dict)
     assistant_text: str = ""

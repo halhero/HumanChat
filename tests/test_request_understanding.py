@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from human_chat.memory.index_store import MemoryIndexEntry
 from human_chat.memory.retrieval import RecallResult, RecalledMemory
 from human_chat.request_understanding import (
-    RequestUnderstanding,
+    MemoryTriageDecision,
     TRIAGE_MEMORY_LIMIT,
     TriageDecision,
     invoke_request_understanding,
@@ -53,10 +53,12 @@ def test_self_contained_request_is_resolved_without_memory_recall():
     understanding, model = invoke([{
         "outcome": "resolved",
         "resolved_request": "解释 Python 装饰器的工作原理。",
+        "execution_mode": "react",
     }], question="解释 Python 装饰器的工作原理")
 
     assert understanding.resolved_request == "解释 Python 装饰器的工作原理。"
     assert understanding.clarification_question == ""
+    assert understanding.execution_mode == "react"
     assert len(model.calls) == 1
     assert model.calls[0]["schema"] is TriageDecision
     assert model.calls[0]["method"] == "json_mode"
@@ -71,6 +73,7 @@ def test_context_dependent_request_receives_bounded_context_payload():
         [{
             "outcome": "resolved",
             "resolved_request": "继续整理 HumanChat 的 SQLite checkpoint 恢复流程。",
+            "execution_mode": "plan_execute",
         }],
         question="继续",
         recent_context=context,
@@ -82,6 +85,7 @@ def test_context_dependent_request_receives_bounded_context_payload():
         "current_user_input": "继续",
     }
     assert "SQLite checkpoint" in understanding.resolved_request
+    assert understanding.execution_mode == "plan_execute"
 
 
 def test_material_ambiguity_returns_one_minimal_clarification_question():
@@ -124,8 +128,9 @@ def test_memory_search_uses_one_recall_and_a_second_triage_call():
                 "memory_query": "HumanChat 项目当前阶段和后续目标",
             },
             {
+                "outcome": "resolved",
                 "resolved_request": "继续完善 HumanChat 的请求理解与长期记忆召回流程。",
-                "clarification_question": "",
+                "execution_mode": "plan_execute",
             },
         ],
         question="继续上次的 HumanChat 项目",
@@ -139,7 +144,7 @@ def test_memory_search_uses_one_recall_and_a_second_triage_call():
     )]
     assert [call["schema"] for call in model.calls] == [
         TriageDecision,
-        RequestUnderstanding,
+        MemoryTriageDecision,
     ]
     second_payload = json.loads(model.calls[1]["messages"][-1].content)
     assert second_payload == {
@@ -148,6 +153,7 @@ def test_memory_search_uses_one_recall_and_a_second_triage_call():
         "memory_candidates": [entry.payload()],
     }
     assert understanding.resolved_request == "继续完善 HumanChat 的请求理解与长期记忆召回流程。"
+    assert understanding.execution_mode == "plan_execute"
 
 
 def test_empty_memory_candidates_can_produce_clarification_without_recall_loop():
@@ -167,7 +173,7 @@ def test_empty_memory_candidates_can_produce_clarification_without_recall_loop()
                 "memory_query": "用户之前讨论的 Atlas 项目",
             },
             {
-                "resolved_request": "",
+                "outcome": "clarify",
                 "clarification_question": "你指的是哪个 Atlas 项目？",
             },
         ],
@@ -186,6 +192,7 @@ def test_empty_memory_candidates_can_produce_clarification_without_recall_loop()
         {
             "outcome": "resolved",
             "resolved_request": "",
+            "execution_mode": "react",
         },
         {
             "outcome": "search_memory",
@@ -210,14 +217,17 @@ def test_invalid_first_triage_result_fails_at_the_boundary(result):
 @pytest.mark.parametrize(
     "result",
     [
-        {"resolved_request": "", "clarification_question": ""},
+        {"outcome": "resolved", "resolved_request": "", "execution_mode": "react"},
         {
+            "outcome": "resolved",
             "resolved_request": "继续现有方案。",
+            "execution_mode": "react",
             "clarification_question": "你指的是哪个方案？",
         },
         {
+            "outcome": "resolved",
             "resolved_request": "解释装饰器。",
-            "clarification_question": "",
+            "execution_mode": "react",
             "intent": "coding",
         },
     ],
