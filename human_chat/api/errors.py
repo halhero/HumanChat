@@ -12,7 +12,7 @@ from human_chat.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass(frozen=True)
+@dataclass
 class ApiError(Exception):
     status_code: int
     code: str
