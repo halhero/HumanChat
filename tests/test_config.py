@@ -40,9 +40,22 @@ def test_plan_limits_have_one_valid_ordering_boundary():
     settings = config.Settings()
 
     assert settings.plan_initial_max_steps <= settings.plan_hard_execution_limit
-    assert settings.plan_initial_execution_limit <= settings.plan_hard_execution_limit
     with pytest.raises(ValueError):
         config.Settings(
-            plan_initial_execution_limit=5,
+            plan_initial_max_steps=5,
             plan_hard_execution_limit=4,
         )
+
+
+def test_removed_plan_limit_settings_are_not_public_configuration():
+    settings = config.Settings()
+
+    assert not hasattr(settings, "plan_initial_execution_limit")
+    assert not hasattr(settings, "plan_execution_limit_increment")
+    assert all(
+        field_name not in {
+            "plan_initial_execution_limit",
+            "plan_execution_limit_increment",
+        }
+        for field_name, _, _ in config._ENV_OVERRIDES
+    )

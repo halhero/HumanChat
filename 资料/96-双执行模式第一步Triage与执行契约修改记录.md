@@ -1,5 +1,9 @@
 # 双执行模式第一步：Triage 与执行契约修改记录
 
+> 后续纠正：本记录中的 `plan_initial_execution_limit` 和
+> `plan_execution_limit_increment` 已被确认为未经批准的多余配置，不再属于
+> HumanChat 的最终设计。纠正原因、最终四项配置和后续状态边界见资斗 97。
+
 日期：2026-11-20。
 
 ## 1. 本步解决什么问题

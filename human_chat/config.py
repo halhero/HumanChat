@@ -38,8 +38,6 @@ class Settings(BaseModel):
     chat_output_tokens: int = Field(default=2048, ge=256, le=32000)
     react_tool_call_limit: int = Field(default=3, ge=1, le=20)
     plan_initial_max_steps: int = Field(default=6, ge=1, le=20)
-    plan_initial_execution_limit: int = Field(default=4, ge=1, le=20)
-    plan_execution_limit_increment: int = Field(default=3, ge=1, le=10)
     plan_hard_execution_limit: int = Field(default=12, ge=1, le=50)
     plan_step_tool_call_limit: int = Field(default=4, ge=1, le=20)
     stt_provider: Literal["dashscope", "openai"] = "dashscope"
@@ -105,8 +103,6 @@ class Settings(BaseModel):
             raise ValueError("Chat output reserve must be smaller than the total context window")
         if self.plan_initial_max_steps > self.plan_hard_execution_limit:
             raise ValueError("Initial plan size must not exceed the hard execution limit")
-        if self.plan_initial_execution_limit > self.plan_hard_execution_limit:
-            raise ValueError("Initial plan execution limit must not exceed the hard limit")
         return self
 
 
@@ -119,16 +115,6 @@ _ENV_OVERRIDES = (
     ("chat_output_tokens", "HUMANCHAT_CHAT_OUTPUT_TOKENS", int),
     ("react_tool_call_limit", "HUMANCHAT_REACT_TOOL_CALL_LIMIT", int),
     ("plan_initial_max_steps", "HUMANCHAT_PLAN_INITIAL_MAX_STEPS", int),
-    (
-        "plan_initial_execution_limit",
-        "HUMANCHAT_PLAN_INITIAL_EXECUTION_LIMIT",
-        int,
-    ),
-    (
-        "plan_execution_limit_increment",
-        "HUMANCHAT_PLAN_EXECUTION_LIMIT_INCREMENT",
-        int,
-    ),
     ("plan_hard_execution_limit", "HUMANCHAT_PLAN_HARD_EXECUTION_LIMIT", int),
     ("plan_step_tool_call_limit", "HUMANCHAT_PLAN_STEP_TOOL_CALL_LIMIT", int),
     ("stt_provider", "HUMANCHAT_STT_PROVIDER", str),

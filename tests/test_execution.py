@@ -5,6 +5,7 @@ from human_chat.execution import (
     ExecutionPlan,
     PlanStep,
     ReplanDecision,
+    StepExecutionRecord,
     StepResultSubmission,
 )
 
@@ -31,5 +32,16 @@ def test_step_result_requires_a_self_contained_non_empty_result():
     result = StepResultSubmission(status="completed", result="读取到 backend=sqlite。")
 
     assert result.status == "completed"
+    assert StepExecutionRecord(step=step(), result=result).result == result
     with pytest.raises(ValidationError):
         StepResultSubmission(status="completed", result="   ")
+
+
+def test_execution_contracts_reject_unknown_fields():
+    with pytest.raises(ValidationError):
+        PlanStep(
+            instruction="读取项目配置",
+            success_criteria="获得当前生效的配置值",
+            review_after=False,
+            priority=1,
+        )
