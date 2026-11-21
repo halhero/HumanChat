@@ -16,6 +16,7 @@ from human_chat.application import HumanChatApplication, open_human_chat_applica
 from human_chat.api.models import ReviewDecisionRequest
 from human_chat.config import Settings
 from human_chat.conversation import ConversationService
+from human_chat.conversation.models import PendingReview, ReviewDecisionError
 from human_chat.memory.context import (
     Applicability,
     ContextAssessment,
@@ -55,7 +56,7 @@ class FakeChatModel:
         self.calls.append(list(messages))
         return self._responses.pop(0)
 
-    def with_structured_output(self, schema, *, method):
+    def with_structured_output(self, schema, *, method=None):
         parent = self
 
         class StructuredModel:
@@ -90,8 +91,10 @@ def _build_test_graph(
     registry=None,
     context_builder=None,
     memory_retriever=None,
+    settings=None,
 ):
     monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
+    active_settings = settings or Settings(memory_extraction_enabled=False)
     search = SqliteMemoryIndexStore(None)
     service = LongTermMemoryService(
         LangGraphMemoryRepository(InMemoryStore()),
@@ -112,13 +115,13 @@ def _build_test_graph(
         purpose="guidance", decision="needed", reason="适用")]))
     retriever = memory_retriever or MemoryRetriever(search)
     return graph_module.build_graph(
-        Settings(memory_extraction_enabled=False),
+        active_settings,
         memory_service=service,
         memory_retriever=retriever,
         context_builder=context_builder or MemoryContextBuilder(
             retriever,
             selector,
-            Settings(),
+            active_settings,
         ),
         tool_registry=registry or ToolRegistry([]),
     )
@@ -349,6 +352,309 @@ def test_tool_limit_reply_uses_final_reply_state(monkeypatch):
         for message in model.calls[-1]
     )
     assert "tool_messages" not in result
+
+
+def test_plan_execute_runs_ordered_steps_without_leaking_agent_messages(monkeypatch):
+    first = {
+        "instruction": "读取配置",
+        "success_criteria": "获得配置值",
+        "review_after": False,
+    }
+    second = {
+        "instruction": "整理结果",
+        "success_criteria": "形成结果摘要",
+        "review_after": False,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "配置为 sqlite。"},
+                "id": "step-result-1",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "已整理配置摘要。"},
+                "id": "step-result-2",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="计划中的两个步骤已完成。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "读取配置并整理结果。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [first, second]},
+        ],
+    )
+    app = _build_test_graph(monkeypatch, model)
+
+    result = app.invoke({"question": "读取配置并整理"})
+
+    assert result["assistant_text"] == "计划中的两个步骤已完成。"
+    assert result["plan_end_reason"] == "completed"
+    assert len(result["step_history"]) == 2
+    assert result["remaining_steps"] == []
+    assert [record.result.result for record in result["step_history"]] == [
+        "配置为 sqlite。",
+        "已整理配置摘要。",
+    ]
+    assert len(model.calls) == 3
+    assert not any(isinstance(message, ToolMessage) for message in model.calls[1])
+    assert [message.content for message in result["messages"]] == [
+        "读取配置并整理",
+        "计划中的两个步骤已完成。",
+    ]
+
+
+def test_plan_review_after_uses_replan_finish_without_rewriting_history(monkeypatch):
+    planned_step = {
+        "instruction": "检查当前状态",
+        "success_criteria": "获得当前状态",
+        "review_after": True,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "状态已获取。"},
+                "id": "reviewed-step",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="已根据状态结束计划。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "检查状态后决定是否继续。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [planned_step]},
+            {"outcome": "finish"},
+        ],
+    )
+    app = _build_test_graph(monkeypatch, model)
+
+    result = app.invoke({"question": "检查状态后决定"})
+
+    assert result["plan_end_reason"] == "planner_finished"
+    assert len(result["step_history"]) == 1
+    assert result["step_history"][0].step.instruction == "检查当前状态"
+    assert len(model.understanding_calls) == 3
+
+
+def test_failed_plan_step_revises_only_remaining_work(monkeypatch):
+    initial = {
+        "instruction": "尝试原方案",
+        "success_criteria": "得到可用结果",
+        "review_after": False,
+    }
+    revised = {
+        "instruction": "改用替代方案",
+        "success_criteria": "得到可用结果",
+        "review_after": False,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "failed", "result": "原方案不可用。"},
+                "id": "failed-step",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "替代方案成功。"},
+                "id": "revised-step",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="替代方案已完成任务。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "完成任务。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [initial]},
+            {"outcome": "revise", "remaining_steps": [revised]},
+        ],
+    )
+    app = _build_test_graph(monkeypatch, model)
+
+    result = app.invoke({"question": "完成任务"})
+
+    assert result["plan_end_reason"] == "completed"
+    assert [record.result.status for record in result["step_history"]] == [
+        "failed",
+        "completed",
+    ]
+    assert [record.step.instruction for record in result["step_history"]] == [
+        "尝试原方案",
+        "改用替代方案",
+    ]
+
+
+def test_blocked_plan_step_ends_without_replan(monkeypatch):
+    planned_step = {
+        "instruction": "获取外部条件",
+        "success_criteria": "外部条件可用",
+        "review_after": True,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "blocked", "result": "外部条件不可用。"},
+                "id": "blocked-step",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="任务因外部条件阻塞。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "完成需要外部条件的任务。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [planned_step]},
+        ],
+    )
+    app = _build_test_graph(monkeypatch, model)
+
+    result = app.invoke({"question": "完成外部任务"})
+
+    assert result["plan_end_reason"] == "blocked"
+    assert result["step_history"][0].result.status == "blocked"
+    assert len(model.understanding_calls) == 2
+
+
+def test_plan_step_tool_limit_becomes_failed_result(monkeypatch):
+    requested_tools = [
+        {
+            "name": "lookup_context",
+            "args": {"value": str(index)},
+            "id": f"over-limit-{index}",
+            "type": "tool_call",
+        }
+        for index in range(2)
+    ]
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=requested_tools),
+            AIMessage(content="工具额度不足，已结束。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "查询多项上下文。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [{
+                "instruction": "查询上下文",
+                "success_criteria": "获得查询结果",
+                "review_after": False,
+            }]},
+            {"outcome": "finish"},
+        ],
+    )
+    registry = ToolRegistry([
+        RegisteredTool(tool=lookup_context, source="test")
+    ])
+    settings = Settings(
+        memory_extraction_enabled=False,
+        plan_step_tool_call_limit=1,
+    )
+    app = _build_test_graph(
+        monkeypatch,
+        model,
+        registry=registry,
+        settings=settings,
+    )
+
+    result = app.invoke({"question": "查询多项上下文"})
+
+    assert result["step_history"][0].result.status == "failed"
+    assert "工具调用上限" in result["step_history"][0].result.result
+    assert result["plan_end_reason"] == "planner_finished"
+
+
+def test_plan_hard_limit_stops_before_another_step(monkeypatch):
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "唯一允许的尝试已完成。"},
+                "id": "hard-limit-step",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="已达本轮执行上限。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "执行受限任务。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [{
+                "instruction": "执行唯一允许的尝试",
+                "success_criteria": "取得尝试结果",
+                "review_after": False,
+            }]},
+        ],
+    )
+    settings = Settings(
+        memory_extraction_enabled=False,
+        plan_initial_max_steps=1,
+        plan_hard_execution_limit=1,
+    )
+    app = _build_test_graph(monkeypatch, model, settings=settings)
+
+    result = app.invoke({"question": "执行受限任务"})
+
+    assert result["plan_end_reason"] == "hard_limit"
+    assert len(result["step_history"]) == 1
+
+
+def test_review_decisions_map_to_their_own_resume_protocol():
+    tool_review = PendingReview(
+        kind="tool",
+        public_payload={},
+        resume_action_count=2,
+    )
+    user_input = PendingReview(kind="user_input", public_payload={})
+    plan_budget = PendingReview(kind="plan_budget", public_payload={})
+
+    assert ConversationService._resume_value(
+        tool_review,
+        ReviewDecisionRequest(decision="approve"),
+    ) == {"decisions": [{"type": "approve"}, {"type": "approve"}]}
+    assert ConversationService._resume_value(
+        user_input,
+        ReviewDecisionRequest(decision="respond", message="补充内容"),
+    ) == {"decisions": [{"type": "respond", "message": "补充内容"}]}
+    assert ConversationService._resume_value(
+        plan_budget,
+        ReviewDecisionRequest(
+            decision="continue_with_input",
+            message="调整后继续",
+        ),
+    ) == {
+        "decision": "continue_with_input",
+        "message": "调整后继续",
+    }
+    assert ConversationService._resume_value(
+        plan_budget,
+        ReviewDecisionRequest(decision="stop"),
+    ) == {"decision": "stop"}
+    with pytest.raises(ReviewDecisionError):
+        ConversationService._resume_value(
+            tool_review,
+            ReviewDecisionRequest(decision="continue"),
+        )
 
 
 def test_completed_turn_enqueues_known_source_without_converting_history(monkeypatch):
@@ -616,6 +922,166 @@ def test_protected_tool_uses_official_review_resume_protocol(
                 f"{decision} reply"
             )
             assert len(calls) == expected_calls
+            await service.shutdown()
+
+    asyncio.run(run())
+
+
+def test_ask_user_respond_resumes_same_plan_step_once(monkeypatch, tmp_path):
+    planned_step = {
+        "instruction": "取得用户提供的名称并完成处理",
+        "success_criteria": "结果包含用户提供的名称",
+        "review_after": True,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "ask_user",
+                "args": {"question": "请提供要使用的名称。"},
+                "id": "ask-name",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "已使用名称 HumanChat。"},
+                "id": "ask-result",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="已使用你提供的名称完成处理。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "获取名称后完成处理。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [planned_step]},
+            {"outcome": "finish"},
+        ],
+    )
+    monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
+    settings = Settings(
+        openai_api_key="validation-placeholder",
+        session_dir=tmp_path / "sessions",
+        memory_path=tmp_path / "memory.sqlite",
+        checkpoint_path=tmp_path / "checkpoint.sqlite",
+        memory_extraction_enabled=False,
+        memory_semantic_enabled=False,
+    )
+
+    async def run():
+        with open_human_chat_application(settings) as application:
+            service = ConversationService(application)
+            session = application.create_session()
+            stream = await service.start_turn(session.id, "获取名称后处理")
+            events = [event async for event in service.iter_events(stream)]
+            review = next(event for event in events if event.type == "review.required")
+            assert review.data == {
+                "turn_id": stream.turn_id,
+                "kind": "user_input",
+                "question": "请提供要使用的名称。",
+            }
+
+            resumed = await service.resume_turn(
+                stream.turn_id,
+                decision=ReviewDecisionRequest(
+                    decision="respond",
+                    message="HumanChat",
+                ),
+            )
+            resumed_events = [
+                event async for event in service.iter_events(resumed)
+            ]
+            assert resumed_events[-1].type == "turn.completed"
+            snapshot = application._graph.get_state(
+                application._graph_config(session.thread_id)
+            )
+            assert len(snapshot.values["step_history"]) == 1
+            assert snapshot.values["step_used_ask_user"] is False
+            assert snapshot.values["plan_user_context"] == []
+            assert application.get_session_with_messages(session.id)[1][-1].content == (
+                "已使用你提供的名称完成处理。"
+            )
+            await service.shutdown()
+
+    asyncio.run(run())
+
+
+def test_plan_budget_continue_authorizes_to_hard_limit(monkeypatch, tmp_path):
+    first_step = {
+        "instruction": "完成第一阶段",
+        "success_criteria": "第一阶段有结果",
+        "review_after": True,
+    }
+    second_step = {
+        "instruction": "完成第二阶段",
+        "success_criteria": "第二阶段有结果",
+        "review_after": False,
+    }
+    model = FakeChatModel(
+        [
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "第一阶段完成。"},
+                "id": "budget-step-1",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="", tool_calls=[{
+                "name": "StepResultSubmission",
+                "args": {"status": "completed", "result": "第二阶段完成。"},
+                "id": "budget-step-2",
+                "type": "tool_call",
+            }]),
+            AIMessage(content="两个阶段已完成。"),
+        ],
+        understanding_responses=[
+            {
+                "outcome": "resolved",
+                "resolved_request": "顺序完成两个阶段。",
+                "execution_mode": "plan_execute",
+            },
+            {"steps": [first_step]},
+            {"outcome": "revise", "remaining_steps": [second_step]},
+        ],
+    )
+    monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
+    settings = Settings(
+        openai_api_key="validation-placeholder",
+        session_dir=tmp_path / "sessions",
+        memory_path=tmp_path / "memory.sqlite",
+        checkpoint_path=tmp_path / "checkpoint.sqlite",
+        memory_extraction_enabled=False,
+        memory_semantic_enabled=False,
+        plan_initial_max_steps=1,
+        plan_hard_execution_limit=3,
+    )
+
+    async def run():
+        with open_human_chat_application(settings) as application:
+            service = ConversationService(application)
+            session = application.create_session()
+            stream = await service.start_turn(session.id, "完成两个阶段")
+            events = [event async for event in service.iter_events(stream)]
+            review = next(event for event in events if event.type == "review.required")
+            assert review.data["kind"] == "plan_budget"
+            assert review.data["completed_steps"] == 1
+            assert review.data["remaining_steps"] == ["完成第二阶段"]
+            assert review.data["hard_limit"] == 3
+
+            resumed = await service.resume_turn(
+                stream.turn_id,
+                decision=ReviewDecisionRequest(decision="continue"),
+            )
+            resumed_events = [
+                event async for event in service.iter_events(resumed)
+            ]
+            assert resumed_events[-1].type == "turn.completed"
+            snapshot = application._graph.get_state(
+                application._graph_config(session.thread_id)
+            )
+            assert snapshot.values["authorized_step_limit"] == 3
+            assert len(snapshot.values["step_history"]) == 2
+            assert snapshot.values["plan_end_reason"] == "completed"
             await service.shutdown()
 
     asyncio.run(run())

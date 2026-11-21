@@ -21,6 +21,7 @@ import type {
   CompletedMessageEvent,
   ConversationEvent,
   ProgressEvent,
+  ReviewDecision,
   ReviewRequest,
   SessionSummary,
 } from "./types";
@@ -326,7 +327,7 @@ export default function App() {
     }
   };
 
-  const submitReview = async (decision: "approve" | "reject") => {
+  const submitReview = async (decision: ReviewDecision) => {
     const turnId = currentTurnId;
     const sessionId = activeSessionId;
     if (!turnId || !sessionId || !review || busy) {
@@ -401,8 +402,7 @@ export default function App() {
         <ReviewDialog
           review={review}
           submitting={busy}
-          onApprove={() => void submitReview("approve")}
-          onReject={() => void submitReview("reject")}
+          onDecision={(decision) => void submitReview(decision)}
         />
       )}
     </div>

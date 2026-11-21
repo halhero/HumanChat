@@ -1,5 +1,6 @@
 import type {
   ConversationEvent,
+  ReviewDecision,
   SessionDetail,
   SessionSummary,
   TurnSnapshot,
@@ -123,14 +124,14 @@ export function startTurn(
 
 export function resumeTurn(
   turnId: string,
-  decision: "approve" | "reject",
+  decision: ReviewDecision,
   onOpen: (activeTurnId: string) => void,
   onEvent: (event: ConversationEvent) => void,
   signal?: AbortSignal,
 ) {
   return streamRequest(
     `/turns/${encodeURIComponent(turnId)}/decision`,
-    { decision },
+    decision,
     onOpen,
     onEvent,
     signal,

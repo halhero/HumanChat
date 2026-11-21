@@ -33,6 +33,9 @@ def progress_event(
     stages = {
         "understand_request": ("thinking", "正在理解你的问题"),
         "run_react_agent": ("working", "正在获取回答所需的信息"),
+        "create_plan": ("working", "正在规划执行步骤"),
+        "execute_plan_step": ("working", "正在执行计划"),
+        "summarize_plan_result": ("writing", "正在整理执行结果"),
         "finalize_reply": ("writing", "正在生成回复"),
     }
     stage = stages.get(node_name)

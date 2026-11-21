@@ -23,11 +23,39 @@ export interface ReviewItem {
   details?: Record<string, unknown>;
 }
 
-export interface ReviewRequest {
+export interface ToolReviewRequest {
   kind: "tool";
   title: string;
   description: string;
   items: ReviewItem[];
+}
+
+export interface UserInputReviewRequest {
+  kind: "user_input";
+  question: string;
+}
+
+export interface PlanBudgetReviewRequest {
+  kind: "plan_budget";
+  completed_steps: number;
+  remaining_steps: string[];
+  hard_limit: number;
+}
+
+export type ReviewRequest =
+  | ToolReviewRequest
+  | UserInputReviewRequest
+  | PlanBudgetReviewRequest;
+
+export interface ReviewDecision {
+  decision:
+    | "approve"
+    | "reject"
+    | "respond"
+    | "continue"
+    | "continue_with_input"
+    | "stop";
+  message?: string;
 }
 
 export type TurnStatus =
