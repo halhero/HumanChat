@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class HealthFeatures(BaseModel):
@@ -60,7 +60,29 @@ class StartTurnRequest(BaseModel):
 
 class ReviewDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    decision: Literal["approve", "reject"]
+    decision: Literal[
+        "approve",
+        "reject",
+        "respond",
+        "continue",
+        "continue_with_input",
+        "stop",
+    ]
+    message: str | None = None
+
+    @field_validator("message")
+    @classmethod
+    def normalize_message(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @model_validator(mode="after")
+    def validate_required_message(self):
+        if self.decision in {"respond", "continue_with_input"} and not self.message:
+            raise ValueError(f"{self.decision} requires a non-empty message")
+        return self
 
 
 class TurnStatusResponse(BaseModel):

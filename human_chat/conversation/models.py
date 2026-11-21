@@ -57,8 +57,9 @@ class ConversationEvent:
 
 @dataclass(frozen=True)
 class PendingReview:
-    kind: Literal["tool"]
+    kind: Literal["tool", "user_input", "plan_budget"]
     public_payload: dict[str, Any]
+    resume_action_count: int = 1
 
 
 @dataclass

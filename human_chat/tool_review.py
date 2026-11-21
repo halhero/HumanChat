@@ -38,12 +38,6 @@ class ToolReviewRequest(BaseModel):
     calls: list[ToolReviewCall] = Field(default_factory=list)
 
 
-class ToolReviewDecision(BaseModel):
-    """用户对整个调用批次的决定；默认拒绝遵循 fail-closed 原则。"""
-
-    approved: bool = False
-
-
 def create_tool_review_request(
     tool_calls: list,
     registry: ToolRegistry,
@@ -71,47 +65,6 @@ def create_tool_review_request(
             )
         )
     return ToolReviewRequest(calls=calls)
-
-
-def parse_tool_review_decision(
-    data: dict | ToolReviewDecision | None,
-) -> ToolReviewDecision:
-    """把 Graph resume 数据规范化为强类型决定，缺失值按拒绝处理。"""
-
-    if data is None:
-        return ToolReviewDecision()
-    if isinstance(data, ToolReviewDecision):
-        return data
-    return ToolReviewDecision(**data)
-
-
-def parse_tool_review_request(
-    data: dict | ToolReviewRequest | None,
-) -> ToolReviewRequest:
-    """兼容 checkpoint 中的字典和进程内 Pydantic 模型。"""
-
-    if data is None:
-        return ToolReviewRequest()
-    if isinstance(data, ToolReviewRequest):
-        return data
-    return ToolReviewRequest(**data)
-
-
-def tool_calls_require_confirmation(
-    tool_calls: list,
-    registry: ToolRegistry,
-) -> bool:
-    """只要批次中有一个调用需要确认，就审批整个批次。
-
-    这避免模型在一次回复中混合只读和写入调用时，让写入调用绕过确认。工具是否
-    需要确认完全由注册策略决定，而不是由模型声明。
-    """
-
-    for tool_call in tool_calls:
-        name = _tool_call_value(tool_call, "name", "unknown_tool")
-        if registry.get_registration(name).policy.requires_confirmation:
-            return True
-    return False
 
 
 def redact_tool_arguments(value):

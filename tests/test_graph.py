@@ -13,6 +13,7 @@ from langgraph.store.memory import InMemoryStore
 import human_chat.application as application_module
 import human_chat.graph as graph_module
 from human_chat.application import HumanChatApplication, open_human_chat_application
+from human_chat.api.models import ReviewDecisionRequest
 from human_chat.config import Settings
 from human_chat.conversation import ConversationService
 from human_chat.memory.context import (
@@ -43,11 +44,14 @@ class FakeChatModel:
         self.understanding_calls = []
         self.bound_tools = []
 
-    def bind_tools(self, tools):
+    def bind(self, **kwargs):
+        return self
+
+    def bind_tools(self, tools, **kwargs):
         self.bound_tools = list(tools)
         return self
 
-    def invoke(self, messages):
+    def invoke(self, messages, config=None, **kwargs):
         self.calls.append(list(messages))
         return self._responses.pop(0)
 
@@ -127,7 +131,6 @@ def test_direct_reply_reuses_first_model_response(monkeypatch):
     result = app.invoke({"question": "你好"})
 
     assert result["assistant_text"] == "直接回答"
-    assert result["tool_messages"] == []
     assert len(model.calls) == 1
     assert isinstance(model.calls[0][0], SystemMessage)
     assert isinstance(model.calls[0][-1], HumanMessage)
@@ -255,14 +258,12 @@ def test_clarification_is_committed_without_memory_agent_or_tools(monkeypatch):
     result = app.invoke({"question": "把它发给他"})
 
     assert result["assistant_text"] == "你希望把哪份内容发送给哪位接收者？"
-    assert result["tool_messages"] == []
     assert [message.content for message in result["messages"]] == [
         "把它发给他",
         "你希望把哪份内容发送给哪位接收者？",
     ]
     assert model.calls == []
     assert len(model.understanding_calls) == 1
-    assert result["tool_call_count"] == 0
 
 
 def test_request_understanding_failure_stops_before_context_and_agent(monkeypatch):
@@ -313,13 +314,8 @@ def test_tool_result_stays_in_same_model_conversation(monkeypatch):
     assert result["assistant_text"] == "基于工具结果回答"
     assert len(model.calls) == 2
     assert any(isinstance(message, ToolMessage) for message in model.calls[1])
-    assert isinstance(result["tool_messages"][-1], ToolMessage)
-    assert not any(
-        isinstance(message, AIMessage) and message.content == "基于工具结果回答"
-        for message in result["tool_messages"]
-    )
-    assert result["tool_call_count"] == 1
-    assert result["tool_events"][0]["status"] == "success"
+    assert "tool_messages" not in result
+    assert not any(isinstance(message, ToolMessage) for message in result["messages"])
     assert len(model.understanding_calls) == 1
 
 
@@ -345,13 +341,14 @@ def test_tool_limit_reply_uses_final_reply_state(monkeypatch):
     result = app.invoke({"question": "连续查询项目"})
 
     assert result["assistant_text"] == "工具调用达到上限后的回答"
-    assert result["tool_call_count"] == graph_module.MAX_TOOL_CALL_ROUNDS
-    assert isinstance(result["tool_messages"][-1], ToolMessage)
-    assert result["tool_messages"][-1].content.startswith("[tool_limit]")
-    assert not any(
-        isinstance(message, AIMessage) and message.content == "工具调用达到上限后的回答"
-        for message in result["tool_messages"]
+    assert len(model.calls) == 5
+    assert any(
+        isinstance(message, ToolMessage)
+        and getattr(message, "status", None) == "error"
+        and "limit" in str(message.content).lower()
+        for message in model.calls[-1]
     )
+    assert "tool_messages" not in result
 
 
 def test_completed_turn_enqueues_known_source_without_converting_history(monkeypatch):
@@ -542,6 +539,83 @@ def test_cancelled_tool_review_does_not_return_from_checkpoint(monkeypatch, tmp_
             assert application.get_session_with_messages(session.id)[1] == []
             fresh_service = ConversationService(application)
             assert await fresh_service.get_session_turn(session.id) is None
+            await service.shutdown()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected_calls"),
+    [("approve", 1), ("reject", 0)],
+)
+def test_protected_tool_uses_official_review_resume_protocol(
+    monkeypatch,
+    tmp_path,
+    decision,
+    expected_calls,
+):
+    calls = []
+
+    @tool("protected_lookup")
+    def protected_lookup(value: str) -> str:
+        """Return protected test context."""
+
+        calls.append(value)
+        return f"protected:{value}"
+
+    model = FakeChatModel([
+        AIMessage(content="", tool_calls=[{
+            "name": "protected_lookup",
+            "args": {"value": "test"},
+            "id": f"protected-{decision}",
+            "type": "tool_call",
+        }]),
+        AIMessage(content=f"{decision} reply"),
+    ])
+    monkeypatch.setattr(graph_module, "create_chat_model", lambda settings: model)
+    registry = ToolRegistry([
+        RegisteredTool(
+            tool=protected_lookup,
+            source="test",
+            policy=ToolPolicy(requires_confirmation=True),
+        )
+    ])
+    monkeypatch.setattr(
+        application_module,
+        "open_tool_registry",
+        lambda settings: nullcontext(registry),
+    )
+    settings = Settings(
+        openai_api_key="validation-placeholder",
+        session_dir=tmp_path / "sessions",
+        memory_path=tmp_path / "memory.sqlite",
+        checkpoint_path=tmp_path / "checkpoint.sqlite",
+        memory_extraction_enabled=False,
+        memory_semantic_enabled=False,
+    )
+
+    async def run():
+        with open_human_chat_application(settings) as application:
+            service = ConversationService(application)
+            session = application.create_session()
+            stream = await service.start_turn(session.id, "question")
+            events = [event async for event in service.iter_events(stream)]
+            review = next(event for event in events if event.type == "review.required")
+            assert review.data["kind"] == "tool"
+            assert review.data["items"][0]["title"] == "protected_lookup"
+
+            resumed = await service.resume_turn(
+                stream.turn_id,
+                decision=ReviewDecisionRequest(decision=decision),
+            )
+            resumed_events = [
+                event async for event in service.iter_events(resumed)
+            ]
+            assert resumed_events[-1].type == "turn.completed"
+            assert application.get_session_with_messages(session.id)[1][-1].content == (
+                f"{decision} reply"
+            )
+            assert len(calls) == expected_calls
             await service.shutdown()
 
     asyncio.run(run())

@@ -2,6 +2,7 @@
 
 from typing import Annotated, Literal
 
+from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 
@@ -82,6 +83,13 @@ SUMMARY_PLAN_PROMPT = """
 7. 不建议从头重做已完成步骤。
 8. 输出自然、简洁、面向用户的最终文本。
 """.strip()
+
+
+@tool
+def ask_user(question: str) -> str:
+    """Ask the user for information that only the user can provide."""
+
+    raise RuntimeError("ask_user must be resolved by HITL respond")
 
 
 class PlanStep(BaseModel):

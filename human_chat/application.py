@@ -288,6 +288,13 @@ class HumanChatApplication:
                 return pending.value
         return None
 
+    def create_pending_review(self, payload):
+        """Translate a Graph interrupt without exposing the tool registry."""
+
+        from human_chat.conversation.protocol import create_pending_review
+
+        return create_pending_review(payload, self._tool_registry)
+
     def discard_pending_turn(self, session_id: str) -> None:
         """Finish a stopped conversation phase without running pending tools.
 
@@ -304,10 +311,13 @@ class HumanChatApplication:
             self._graph.update_state(
                 config,
                 {
-                    "tool_messages": [],
-                    "tool_review_request": None,
-                    "tool_review_approved": None,
                     "memory_context": {},
+                    "remaining_steps": [],
+                    "step_history": [],
+                    "authorized_step_limit": 0,
+                    "plan_user_context": [],
+                    "step_used_ask_user": False,
+                    "plan_end_reason": None,
                 },
                 as_node="finish_turn",
             )

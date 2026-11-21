@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from typing import AsyncIterator, Literal
+from typing import TYPE_CHECKING, AsyncIterator
 from uuid import uuid4
 
 from langgraph.errors import GraphDrained
@@ -16,6 +16,7 @@ from human_chat.conversation.models import (
     ConversationEvent,
     ConversationStream,
     ConversationTurn,
+    ReviewDecisionError,
     SessionBusyError,
     SessionNotFoundError,
     TurnNotFoundError,
@@ -23,13 +24,12 @@ from human_chat.conversation.models import (
     TurnStateError,
     TurnStatus,
 )
-from human_chat.conversation.protocol import (
-    create_pending_review,
-    extract_interrupt_payloads,
-    progress_event,
-)
+from human_chat.conversation.protocol import extract_interrupt_payloads, progress_event
 from human_chat.logging_config import get_logger
 from human_chat.session_models import now_local
+
+if TYPE_CHECKING:
+    from human_chat.api.models import ReviewDecisionRequest
 
 
 logger = get_logger(__name__)
@@ -84,13 +84,13 @@ class ConversationService:
         self,
         turn_id: str,
         *,
-        decision: Literal["approve", "reject"],
+        decision: ReviewDecisionRequest,
     ) -> ConversationStream:
         async with self._lock:
             turn = self._require_turn(turn_id)
             if turn.status != TurnStatus.AWAITING_REVIEW or turn.pending_review is None:
                 raise TurnStateError("该对话当前不在等待确认。")
-            resume_value = {"approved": decision == "approve"}
+            resume_value = self._resume_value(turn.pending_review, decision)
             turn.status = TurnStatus.RUNNING
             turn.pending_review = None
             turn.updated_at = now_local()
@@ -99,6 +99,48 @@ class ConversationService:
                 graph_input=resume_value,
                 is_resume=True,
             )
+
+    @staticmethod
+    def _resume_value(pending_review, request: ReviewDecisionRequest) -> dict:
+        decision = request.decision
+        if pending_review.kind == "tool":
+            if decision not in {"approve", "reject"}:
+                raise ReviewDecisionError("工具确认只支持批准或拒绝。")
+            if decision == "approve":
+                action = {"type": "approve"}
+            else:
+                action = {
+                    "type": "reject",
+                    "message": request.message
+                    or "用户拒绝执行该工具调用，不要重试同一操作。",
+                }
+            return {
+                "decisions": [
+                    dict(action)
+                    for _ in range(pending_review.resume_action_count)
+                ]
+            }
+
+        if pending_review.kind == "user_input":
+            if decision == "respond":
+                return {
+                    "decisions": [{"type": "respond", "message": request.message}]
+                }
+            if decision == "stop":
+                return {
+                    "decisions": [{
+                        "type": "reject",
+                        "message": "用户选择不提供该信息并停止当前步骤。",
+                    }]
+                }
+            raise ReviewDecisionError("用户输入请求只支持回答或停止。")
+
+        if decision not in {"continue", "continue_with_input", "stop"}:
+            raise ReviewDecisionError("计划额度确认不支持该决定。")
+        resume_value = {"decision": decision}
+        if request.message is not None:
+            resume_value["message"] = request.message
+        return resume_value
 
     async def cancel_turn(self, turn_id: str) -> TurnStatus:
         async with self._lock:
@@ -166,7 +208,7 @@ class ConversationService:
             id=uuid4().hex,
             session_id=session_id,
             status=TurnStatus.AWAITING_REVIEW,
-            pending_review=create_pending_review(payload),
+            pending_review=self._application.create_pending_review(payload),
         )
         self._remember_turn(turn)
         self._active_sessions[session_id] = turn.id
@@ -326,7 +368,7 @@ class ConversationService:
                 continue
             payloads = extract_interrupt_payloads(data)
             if payloads:
-                review = create_pending_review(payloads[0])
+                review = self._application.create_pending_review(payloads[0])
                 continue
             for node_name, update in data.items():
                 if not isinstance(update, dict):

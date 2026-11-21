@@ -86,11 +86,13 @@ async def decide_turn(
     try:
         stream = await conversations.resume_turn(
             turn_id,
-            decision=payload.decision,
+            decision=payload,
         )
     except TurnNotFoundError as exc:
         raise ApiError(404, "turn_not_found", str(exc)) from exc
-    except (TurnStateError, ReviewDecisionError) as exc:
+    except ReviewDecisionError as exc:
+        raise ApiError(400, "invalid_review_decision", str(exc)) from exc
+    except TurnStateError as exc:
         raise ApiError(409, "invalid_turn_decision", str(exc)) from exc
     return conversation_stream_response(request, conversations, stream)
 

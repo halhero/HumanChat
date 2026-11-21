@@ -7,7 +7,8 @@ from human_chat.conversation.models import (
     PendingReview,
     ReviewDecisionError,
 )
-from human_chat.tool_review import parse_tool_review_request
+from human_chat.tool_provider import ToolRegistry
+from human_chat.tool_review import create_tool_review_request
 
 
 def extract_interrupt_payloads(update: dict) -> list[Any]:
@@ -31,8 +32,7 @@ def progress_event(
 ) -> ConversationEvent | None:
     stages = {
         "understand_request": ("thinking", "正在理解你的问题"),
-        "execute_project_tools": ("working", "正在获取回答所需的信息"),
-        "generate_limit_reply": ("writing", "正在整理已有信息"),
+        "run_react_agent": ("working", "正在获取回答所需的信息"),
         "finalize_reply": ("writing", "正在生成回复"),
     }
     stage = stages.get(node_name)
@@ -45,13 +45,40 @@ def progress_event(
     )
 
 
-def create_pending_review(payload: Any) -> PendingReview:
+def create_pending_review(
+    payload: Any,
+    registry: ToolRegistry,
+) -> PendingReview:
     if not isinstance(payload, dict):
         raise ReviewDecisionError("无法识别确认请求。")
 
-    review_type = payload.get("type")
-    if review_type == "tool_review":
-        request = parse_tool_review_request(payload.get("request"))
+    if payload.get("type") == "plan_budget":
+        return PendingReview(
+            kind="plan_budget",
+            public_payload={
+                "kind": "plan_budget",
+                "completed_steps": payload.get("completed_steps", 0),
+                "remaining_steps": payload.get("remaining_steps", []),
+                "hard_limit": payload.get("hard_limit", 0),
+            },
+        )
+
+    action_requests = payload.get("action_requests")
+    if isinstance(action_requests, list) and action_requests:
+        if any(action.get("name") == "ask_user" for action in action_requests):
+            if len(action_requests) != 1 or action_requests[0].get("name") != "ask_user":
+                raise ReviewDecisionError("不支持同时请求用户输入和普通工具。")
+            return PendingReview(
+                kind="user_input",
+                public_payload={
+                    "kind": "user_input",
+                    "question": action_requests[0].get("args", {}).get(
+                        "question", ""
+                    ),
+                },
+            )
+
+        request = create_tool_review_request(action_requests, registry)
         return PendingReview(
             kind="tool",
             public_payload={
@@ -72,6 +99,7 @@ def create_pending_review(payload: Any) -> PendingReview:
                     for index, call in enumerate(request.calls)
                 ],
             },
+            resume_action_count=len(action_requests),
         )
 
     raise ReviewDecisionError("暂不支持这种确认请求。")

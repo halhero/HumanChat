@@ -1,10 +1,12 @@
 import json
 
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware import (
+    HumanInTheLoopMiddleware,
+    ToolCallLimitMiddleware,
+)
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode
-from langgraph.types import interrupt
 
 from human_chat.character import Character, load_character
 from human_chat.config import Settings, load_settings
@@ -17,12 +19,6 @@ from human_chat.messages import SourceMessage, new_source
 from human_chat.request_understanding import invoke_request_understanding
 from human_chat.schemas import ChatState
 from human_chat.tool_provider import ToolRegistry, create_tool_registry
-from human_chat.tool_review import (
-    create_tool_review_request,
-    parse_tool_review_decision,
-    redact_tool_arguments,
-    tool_calls_require_confirmation,
-)
 
 
 logger = get_logger(__name__)
@@ -36,13 +32,13 @@ TOOL_CALLING_PROMPT = """
 如果不需要工具，或者已经收集到足够信息，请直接给出简短结论，不要调用工具。
 """
 
-TOOL_LIMIT_PROMPT = """
-本轮工具调用已经达到上限。请停止调用工具，并根据当前对话和已经获得的工具结果，
-直接给出最终回答。如果信息仍然不足，请明确说明缺少什么信息。
-"""
 
-MAX_TOOL_CALL_ROUNDS = 3
-
+def _project_tool_interrupts(registry: ToolRegistry) -> dict[str, dict]:
+    return {
+        registration.name: {"allowed_decisions": ["approve", "reject"]}
+        for registration in registry.registrations()
+        if registration.policy.requires_confirmation
+    }
 
 def _build_system_prompt(character, resolved_request: str) -> str:
     base = (
@@ -88,47 +84,6 @@ def _message_text(message) -> str:
     return "".join(parts).strip()
 
 
-def _tool_call_name(tool_call) -> str:
-    if isinstance(tool_call, dict):
-        return tool_call.get("name", "unknown_tool")
-    return getattr(tool_call, "name", "unknown_tool")
-
-
-def _tool_call_args(tool_call):
-    if isinstance(tool_call, dict):
-        return tool_call.get("args", {})
-    return getattr(tool_call, "args", {})
-
-
-def _tool_call_id(tool_call) -> str:
-    if isinstance(tool_call, dict):
-        return str(tool_call.get("id", ""))
-    return str(getattr(tool_call, "id", ""))
-
-
-def _build_tool_events(state: ChatState, tool_result_messages: list) -> list[dict]:
-    if not state.tool_messages:
-        return []
-    last_message = state.tool_messages[-1]
-    tool_calls = getattr(last_message, "tool_calls", []) or []
-    events = []
-    for index, tool_call in enumerate(tool_calls):
-        result_message = tool_result_messages[index] if index < len(tool_result_messages) else None
-        content = str(getattr(result_message, "content", ""))
-        message_status = getattr(result_message, "status", None)
-        is_error = message_status == "error" or content.startswith("[tool_error]")
-        events.append(
-            {
-                "round": state.tool_call_count + 1,
-                "tool": _tool_call_name(tool_call),
-                "arguments": redact_tool_arguments(_tool_call_args(tool_call)),
-                "status": "error" if is_error else "success",
-                "result_preview": content[:300],
-            }
-        )
-    return events
-
-
 def build_graph(
     settings: Settings | None = None,
     *,
@@ -146,8 +101,20 @@ def build_graph(
     # Graph 只消费统一注册表中的 LangChain Tool，不区分本地实现和 MCP 来源。
     # 来源、安全策略和同步/异步适配都已在 Provider 层完成。
     project_tools = active_tool_registry.get_tools()
-    tool_llm = llm.bind_tools(project_tools)
-    tool_node = ToolNode(project_tools, messages_key="tool_messages")
+    react_agent = create_agent(
+        model=llm,
+        tools=project_tools,
+        middleware=[
+            HumanInTheLoopMiddleware(
+                interrupt_on=_project_tool_interrupts(active_tool_registry),
+            ),
+            ToolCallLimitMiddleware(
+                run_limit=settings.react_tool_call_limit,
+                exit_behavior="continue",
+            ),
+        ],
+        name="human_chat_react",
+    )
 
     def initialize_turn(state: ChatState, config: RunnableConfig):
         source = SourceMessage.model_validate(state.input_source) if state.input_source else None
@@ -164,13 +131,13 @@ def build_graph(
             "clarification_question": "",
             "execution_mode": "react",
             "memory_context": {},
-            "tool_messages": [],
-            "tool_call_count": 0,
-            "tool_events": [],
-            "tool_limit_reached": False,
-            "tool_review_request": None,
-            "tool_review_approved": None,
             "assistant_text": "",
+            "remaining_steps": [],
+            "step_history": [],
+            "authorized_step_limit": 0,
+            "plan_user_context": [],
+            "step_used_ask_user": False,
+            "plan_end_reason": None,
         }
 
     def _build_recent_context_payload(state: ChatState) -> list[dict[str, str]]:
@@ -205,90 +172,19 @@ def build_graph(
     def reply_clarification(state: ChatState):
         return {"assistant_text": state.clarification_question}
 
-    def call_agent_model(state: ChatState):
-        tool_messages = state.tool_messages or [
+    def run_react_agent(state: ChatState, config: RunnableConfig):
+        current = [
             SourceMessage.model_validate(state.input_source).to_message()
         ]
-        conversation = build_request(state, tool_messages, project_tools)
-
-        response = tool_llm.invoke(conversation)
-        if getattr(response, "tool_calls", None):
-            return {"tool_messages": [*tool_messages, response]}
-        return {"assistant_text": _message_text(response)}
-
-    def execute_project_tools(state: ChatState):
-        # ToolNode 使用模型产生的原始 tool call，因此审批界面中的参数脱敏副本不会
-        # 改写真正的调用参数。MCP 工具的同步入口已由 McpToolProvider 注入。
-        result = tool_node.invoke({"tool_messages": state.tool_messages})
-        tool_result_messages = result.get("tool_messages", [])
-        return {
-            "tool_messages": [*state.tool_messages, *tool_result_messages],
-            "tool_call_count": state.tool_call_count + 1,
-            "tool_events": [*state.tool_events, *_build_tool_events(state, tool_result_messages)],
-            "tool_review_request": None,
-            "tool_review_approved": None,
-        }
-
-    def review_tool_calls(state: ChatState):
-        """暂停 Graph，等待调用方明确批准这一批高风险工具。"""
-
-        last_message = state.tool_messages[-1]
-        tool_calls = getattr(last_message, "tool_calls", []) or []
-        review_request = create_tool_review_request(
-            tool_calls,
-            active_tool_registry,
+        conversation = build_request(state, current, project_tools)
+        result = react_agent.invoke(
+            {"messages": conversation},
+            config=config,
         )
-        # interrupt 会把状态持久化到 checkpointer，并把审批请求交还接口层。恢复时
-        # Command(resume=...) 的值会成为这里的返回值，然后 Graph 从本节点继续。
-        decision_data = interrupt(
-            {
-                "type": "tool_review",
-                "request": _model_to_dict(review_request),
-            }
-        )
-        decision = parse_tool_review_decision(decision_data)
-        return {
-            "tool_review_request": _model_to_dict(review_request),
-            "tool_review_approved": decision.approved,
-        }
-
-    def reject_tool_calls(state: ChatState):
-        """在不执行工具的情况下，为每个被拒调用生成协议完整的结果消息。"""
-
-        last_message = state.tool_messages[-1]
-        tool_calls = getattr(last_message, "tool_calls", []) or []
-        rejected_messages = []
-        rejected_events = []
-
-        for tool_call in tool_calls:
-            name = _tool_call_name(tool_call)
-            # OpenAI/LangChain 工具协议要求每个 tool_call_id 都对应一个 ToolMessage。
-            # 仅跳过 ToolNode 会留下悬空调用，后续模型请求可能因此被服务端拒绝。
-            rejected_messages.append(
-                ToolMessage(
-                    content="[tool_denied] 用户拒绝了本次工具调用。",
-                    tool_call_id=_tool_call_id(tool_call),
-                    name=name,
-                    status="error",
-                )
-            )
-            rejected_events.append(
-                {
-                    "round": state.tool_call_count + 1,
-                    "tool": name,
-                    "arguments": redact_tool_arguments(_tool_call_args(tool_call)),
-                    "status": "denied",
-                    "result_preview": "用户拒绝了本次工具调用。",
-                }
-            )
-
-        return {
-            "tool_messages": [*state.tool_messages, *rejected_messages],
-            "tool_call_count": state.tool_call_count + 1,
-            "tool_events": [*state.tool_events, *rejected_events],
-            "tool_review_request": None,
-            "tool_review_approved": None,
-        }
+        assistant_text = _message_text(result["messages"][-1])
+        if not assistant_text:
+            raise RuntimeError("Agent did not return a user-facing reply")
+        return {"assistant_text": assistant_text}
 
     def build_request(state, current, tools):
         conversation, diagnostics = assemble_request(_build_system_prompt(active_character, state.resolved_request), state.messages,
@@ -296,17 +192,6 @@ def build_graph(
         if diagnostics:
             logger.info("Memory context diagnostics: %s", diagnostics)
         return conversation
-
-    def generate_limit_reply(state: ChatState):
-        pending = state.tool_messages[-1].tool_calls
-        completed = [*state.tool_messages, *[ToolMessage(content="[tool_limit] 本轮工具调用已达上限，未执行。",
-            tool_call_id=call["id"], name=call["name"], status="error") for call in pending]]
-        conversation = build_request(state, [*completed, SystemMessage(content=TOOL_LIMIT_PROMPT)], [])
-        response = llm.invoke(conversation)
-        return {
-            "tool_messages": completed,
-            "assistant_text": _message_text(response),
-        }
 
     def finalize_reply(state: ChatState):
         assistant_text = state.assistant_text.strip()
@@ -326,64 +211,19 @@ def build_graph(
     def finish_turn(state: ChatState):
         return {}
 
-    def mark_tool_limit_reached(state: ChatState):
-        return {
-            "tool_limit_reached": True,
-            "tool_events": [
-                *state.tool_events,
-                {
-                    "round": state.tool_call_count,
-                    "tool": "tool_loop",
-                    "arguments": {},
-                    "status": "limit_reached",
-                    "result_preview": f"达到最大工具调用轮数：{MAX_TOOL_CALL_ROUNDS}",
-                },
-            ],
-        }
-
-    def route_after_agent_model(state: ChatState):
-        if state.assistant_text:
-            return "finalize_reply"
-        if not state.tool_messages:
-            return "finalize_reply"
-        last_message = state.tool_messages[-1]
-        if getattr(last_message, "tool_calls", None):
-            if state.tool_call_count >= MAX_TOOL_CALL_ROUNDS:
-                return "mark_tool_limit_reached"
-            # 一个模型回复可以同时请求多个工具。只要其中一个受保护，就先审批
-            # 整个批次，避免可写调用夹在只读调用中绕过人工确认。
-            if tool_calls_require_confirmation(
-                last_message.tool_calls,
-                active_tool_registry,
-            ):
-                return "review_tool_calls"
-            return "execute_project_tools"
-        return "finalize_reply"
-
     def route_after_request_understanding(state: ChatState):
         if state.clarification_question:
             return "reply_clarification"
         return "build_memory_context"
-
-    def route_after_tool_review(state: ChatState):
-        # 审批只有两个出口：批准才进入真实 ToolNode；其他值包括缺失值都拒绝。
-        if state.tool_review_approved:
-            return "execute_project_tools"
-        return "reject_tool_calls"
 
     workflow = StateGraph(ChatState)
     workflow.add_node("initialize_turn", initialize_turn)
     workflow.add_node("understand_request", understand_request)
     workflow.add_node("build_memory_context", build_memory_context)
     workflow.add_node("reply_clarification", reply_clarification)
-    workflow.add_node("call_agent_model", call_agent_model)
-    workflow.add_node("execute_project_tools", execute_project_tools)
-    workflow.add_node("review_tool_calls", review_tool_calls)
-    workflow.add_node("reject_tool_calls", reject_tool_calls)
-    workflow.add_node("generate_limit_reply", generate_limit_reply)
+    workflow.add_node("run_react_agent", run_react_agent)
     workflow.add_node("finalize_reply", finalize_reply)
     workflow.add_node("finish_turn", finish_turn)
-    workflow.add_node("mark_tool_limit_reached", mark_tool_limit_reached)
     workflow.add_edge(START, "initialize_turn")
     workflow.add_edge("initialize_turn", "understand_request")
     workflow.add_conditional_edges(
@@ -394,36 +234,9 @@ def build_graph(
             "reply_clarification": "reply_clarification",
         },
     )
-    workflow.add_edge("build_memory_context", "call_agent_model")
+    workflow.add_edge("build_memory_context", "run_react_agent")
     workflow.add_edge("reply_clarification", "finalize_reply")
-    workflow.add_conditional_edges(
-        "call_agent_model",
-        route_after_agent_model,
-        {
-            "execute_project_tools": "execute_project_tools",
-            "review_tool_calls": "review_tool_calls",
-            "mark_tool_limit_reached": "mark_tool_limit_reached",
-            "finalize_reply": "finalize_reply",
-        },
-    )
-    # 工具审批是 Graph 的一等节点，而不是接口层在 Graph 外自行调用工具。这样暂停、
-    # 恢复和 checkpoint 都保持在 LangGraph 的状态机语义内。
-    workflow.add_conditional_edges(
-        "review_tool_calls",
-        route_after_tool_review,
-        {
-            "execute_project_tools": "execute_project_tools",
-            "reject_tool_calls": "reject_tool_calls",
-        },
-    )
-    workflow.add_edge("execute_project_tools", "call_agent_model")
-    workflow.add_edge("reject_tool_calls", "call_agent_model")
-    workflow.add_edge("mark_tool_limit_reached", "generate_limit_reply")
-    workflow.add_edge("generate_limit_reply", "finalize_reply")
+    workflow.add_edge("run_react_agent", "finalize_reply")
     workflow.add_edge("finalize_reply", "finish_turn")
     workflow.add_edge("finish_turn", END)
     return workflow.compile(checkpointer=checkpointer)
-
-
-def _model_to_dict(model) -> dict:
-    return model.model_dump()
